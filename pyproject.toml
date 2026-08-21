@@ -25,9 +25,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+]
 dev = [
   "pytest>=7",
   "pytest-asyncio>=0.21",
+  "httpx>=0.25",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
 ]
 
 [project.scripts]
@@ -39,6 +46,9 @@ Repository = "https://github.com/Kimdo-765/cross_agent_ochestrator"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"cao.web" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

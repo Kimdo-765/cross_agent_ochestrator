@@ -9,10 +9,11 @@ from .base import AgentAdapter
 from .claude_code import ClaudeCodeAdapter
 from .codex import CodexAdapter
 from .gemini import GeminiAdapter
+from .grok import GrokAdapter
 from .shell import ShellAdapter
 
 REGISTRY: dict[str, Type[AgentAdapter]] = {
-    cls.key: cls for cls in (ClaudeCodeAdapter, CodexAdapter, GeminiAdapter, ShellAdapter)
+    cls.key: cls for cls in (ClaudeCodeAdapter, CodexAdapter, GeminiAdapter, GrokAdapter, ShellAdapter)
 }
 
 

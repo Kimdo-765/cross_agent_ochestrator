@@ -11,6 +11,32 @@ from ..runner import ProcResult
 from .base import AgentAdapter
 
 
+_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max", "ultra")
+
+
+def _codex_effort(level: str, backend: str = "codex", model: Optional[str] = None) -> str:
+    """Clamp the requested effort to what this model supports (per ~/.codex/models_cache.json).
+
+    Every Codex model takes low..xhigh; newer ones add max/ultra. Asking an older model for
+    "ultra" would make the CLI exit with an error, so degrade to the highest supported level.
+    """
+    level = str(level).lower()
+    try:
+        from ..loop.catalog import efforts_for
+
+        supported = efforts_for(backend, model)
+    except Exception:
+        supported = list(_EFFORT_ORDER[:4])
+    if level in supported or level not in _EFFORT_ORDER:
+        return level
+    ranked = [e for e in _EFFORT_ORDER if e in supported]
+    if not ranked:
+        return level
+    idx = _EFFORT_ORDER.index(level)
+    lower = [e for e in ranked if _EFFORT_ORDER.index(e) <= idx]
+    return lower[-1] if lower else ranked[0]
+
+
 class CodexAdapter(AgentAdapter):
     """Runs ``codex exec --json -o <file>`` and reads the last agent message.
 
@@ -27,6 +53,10 @@ class CodexAdapter(AgentAdapter):
     key = "codex"
     binary = "codex"
 
+    def provider_config(self) -> dict[str, str]:
+        """Extra ``-c key=value`` pairs (overridden by provider-specific subclasses such as Grok)."""
+        return {}
+
     def _last_message_path(self, task: Task, run_dir: Path) -> Path:
         return run_dir / "logs" / f"{task.id}-{self.spec.name}.last.txt"
 
@@ -35,12 +65,18 @@ class CodexAdapter(AgentAdapter):
         last = self._last_message_path(task, run_dir)
         last.parent.mkdir(parents=True, exist_ok=True)
         argv = [self.executable(), "exec", "--json", "--color", "never", "-o", str(last), "-C", str(workdir)]
-        if o.get("full_auto"):
+        if self.spec.read_only:
+            argv += ["--sandbox", "read-only"]
+        elif o.get("full_auto"):
             argv.append("--dangerously-bypass-approvals-and-sandbox")
         else:
             argv += ["--sandbox", str(o.get("sandbox", "workspace-write"))]
         if self.spec.model:
             argv += ["--model", self.spec.model]
+        if self.spec.effort:
+            argv += ["-c", f"model_reasoning_effort={_codex_effort(self.spec.effort, self.key, self.spec.model)}"]
+        for k, v in self.provider_config().items():
+            argv += ["-c", f"{k}={v}"]
         if o.get("profile"):
             argv += ["--profile", str(o["profile"])]
         for k, v in (o.get("config") or {}).items():
