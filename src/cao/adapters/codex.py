@@ -11,6 +11,13 @@ from ..runner import ProcResult
 from .base import AgentAdapter
 
 
+_EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh"}
+
+
+def _codex_effort(level: str) -> str:
+    return _EFFORT_MAP.get(str(level).lower(), str(level))
+
+
 class CodexAdapter(AgentAdapter):
     """Runs ``codex exec --json -o <file>`` and reads the last agent message.
 
@@ -27,6 +34,10 @@ class CodexAdapter(AgentAdapter):
     key = "codex"
     binary = "codex"
 
+    def provider_config(self) -> dict[str, str]:
+        """Extra ``-c key=value`` pairs (overridden by provider-specific subclasses such as Grok)."""
+        return {}
+
     def _last_message_path(self, task: Task, run_dir: Path) -> Path:
         return run_dir / "logs" / f"{task.id}-{self.spec.name}.last.txt"
 
@@ -35,12 +46,18 @@ class CodexAdapter(AgentAdapter):
         last = self._last_message_path(task, run_dir)
         last.parent.mkdir(parents=True, exist_ok=True)
         argv = [self.executable(), "exec", "--json", "--color", "never", "-o", str(last), "-C", str(workdir)]
-        if o.get("full_auto"):
+        if self.spec.read_only:
+            argv += ["--sandbox", "read-only"]
+        elif o.get("full_auto"):
             argv.append("--dangerously-bypass-approvals-and-sandbox")
         else:
             argv += ["--sandbox", str(o.get("sandbox", "workspace-write"))]
         if self.spec.model:
             argv += ["--model", self.spec.model]
+        if self.spec.effort:
+            argv += ["-c", f"model_reasoning_effort={_codex_effort(self.spec.effort)}"]
+        for k, v in self.provider_config().items():
+            argv += ["-c", f"{k}={v}"]
         if o.get("profile"):
             argv += ["--profile", str(o["profile"])]
         for k, v in (o.get("config") or {}).items():

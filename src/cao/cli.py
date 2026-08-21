@@ -167,16 +167,182 @@ def cmd_runs(args: argparse.Namespace) -> int:
 # ---- parser --------------------------------------------------------------------
 
 
+# ---- worker/reviewer loop ----------------------------------------------------------
+
+
+def _parse_role(value: str) -> tuple[str, Optional[str]]:
+    """``claude_code`` or ``codex:gpt-5`` -> (backend, model)."""
+    backend, _, model = (value or "").partition(":")
+    return backend.strip(), (model.strip() or None)
+
+
+def cmd_task_run(args: argparse.Namespace) -> int:
+    from .loop.engine import LoopEngine
+    from .loop.models import LoopConfig, RoleConfig, TaskSpec
+    from .loop.store import Store
+
+    request = Path(args.request_file).read_text(encoding="utf-8") if args.request_file else " ".join(args.request)
+    if not request.strip() and not sys.stdin.isatty():
+        request = sys.stdin.read()
+    if not request.strip():
+        _eprint("error: provide a request as an argument, via --request-file, or on stdin")
+        return 1
+    criteria = list(args.criteria or [])
+    if args.criteria_file:
+        criteria += [c.strip(" -*\t") for c in Path(args.criteria_file).read_text(encoding="utf-8").splitlines() if c.strip(" -*\t")]
+
+    wb, wm = _parse_role(args.worker)
+    rb, rm = _parse_role(args.reviewer)
+    spec = TaskSpec(
+        title=args.title or request.strip().splitlines()[0][:60],
+        request=request.strip(),
+        acceptance_criteria=criteria,
+        repo_path=str(Path(args.repo or ".").resolve()),
+        base_branch=args.base,
+        worker=RoleConfig(backend=wb, model=wm, effort=args.worker_effort, role=args.role, instructions=args.instructions or "",
+                          timeout=args.timeout),
+        reviewer=RoleConfig(backend=rb, model=rm, effort=args.reviewer_effort, role="reviewer", timeout=args.timeout),
+        loop=LoopConfig(
+            max_iterations=args.max_iterations,
+            pass_score=args.pass_score,
+            scoring=args.scoring,
+            stop_if_no_progress=args.stop_if_no_progress,
+            budget_usd=args.budget,
+            on_success=args.on_success,
+            require_tests=args.require_tests,
+            respect_verdict=not args.ignore_verdict,
+        ),
+    )
+    problems = spec.validate()
+    if problems:
+        for pr in problems:
+            _eprint(f"error: {pr}")
+        return 2
+    if args.dry_run:
+        print(json.dumps(spec.to_dict(), indent=2, ensure_ascii=False))
+        return 0
+
+    store = Store(Path(args.data_dir) / "cao.db" if args.data_dir else None)
+    engine = LoopEngine(store, listener=(lambda m: None) if args.quiet else (lambda m: _eprint(f"[cao] {m}")))
+    try:
+        run = asyncio.run(engine.run(spec))
+    except KeyboardInterrupt:
+        _eprint("\ninterrupted")
+        return 130
+    if args.json:
+        print(json.dumps(run.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print()
+        print(f"== task {spec.id} :: {run.status.value.upper()}  score={run.final_score}  cost=${run.total_cost_usd:.4f} ==")
+        for it in run.iterations:
+            print(f"  iter {it.number}: score={it.score} decision={it.decision} commit={(it.commit or '-')[:10]}")
+        if run.outcome.get("pr_url"):
+            print(f"PR: {run.outcome['pr_url']}")
+        if run.outcome.get("merged_into"):
+            print(f"merged into {run.outcome['merged_into']} @ {run.outcome['merge_commit'][:10]}")
+        if run.outcome.get("finish_error"):
+            print(f"finish step failed: {run.outcome['finish_error']}")
+        print(f"branch: {run.branch}")
+        print(f"report: {run.outcome.get('report')}")
+        if run.error:
+            print(f"note: {run.error}")
+    return 0 if run.status.value == "passed" else 1
+
+
+def cmd_tasks(args: argparse.Namespace) -> int:
+    from .loop.store import Store
+
+    store = Store(Path(args.data_dir) / "cao.db" if args.data_dir else None)
+    if args.task_id:
+        data = store.get_run(args.task_id)
+        if not data:
+            _eprint(f"no task {args.task_id}")
+            return 1
+        if args.logs:
+            for row in store.logs(args.task_id):
+                print(row["line"])
+            return 0
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return 0
+    rows = store.list_runs(limit=args.limit)
+    if not rows:
+        print("no tasks yet")
+        return 0
+    print(f"{'id':<22} {'status':<10} {'score':>5} {'iter':>5} {'cost':>8}  title")
+    for r in rows:
+        score = f"{r['last_score']:.1f}" if r["last_score"] is not None else "-"
+        print(f"{r['id']:<22} {r['status']:<10} {score:>5} {r['iterations']:>2}/{r['max_iterations'] or '?':<2} "
+              f"${r['total_cost_usd'] or 0:>7.3f}  {r['title'][:50]}")
+    return 0
+
+
+def cmd_web(args: argparse.Namespace) -> int:
+    from .web.server import serve
+
+    return serve(host=args.host, port=args.port, tunnel=args.tunnel, data_dir=args.data_dir, open_browser=not args.no_open)
+
+
+# ---- parser --------------------------------------------------------------------
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="cao",
-        description="Cross-agent orchestrator: run Claude Code, Codex, Gemini (or any CLI agent) together on one goal.",
+        description="Cross-agent orchestrator: a worker agent implements, a different model reviews the real git diff, "
+                    "and the loop repeats until the score passes.",
     )
     p.add_argument("--version", action="version", version=f"cao {__version__}")
-    p.add_argument("-c", "--config", help="path to cao.yaml (default: search upwards from cwd)")
+    p.add_argument("-c", "--config", help="path to cao.yaml (used by 'agents' and 'flow')")
+    p.add_argument("--data-dir", help="where cao keeps its task database (default: $CAO_DATA_DIR or ~/.cao)")
     sub = p.add_subparsers(dest="command", required=True)
 
-    sp = sub.add_parser("init", help="write an example cao.yaml")
+    # -- run: worker/reviewer loop
+    sp = sub.add_parser("run", help="run a task through the worker -> reviewer loop")
+    sp.add_argument("request", nargs="*", help="what to build/change (or --request-file / stdin)")
+    sp.add_argument("--request-file")
+    sp.add_argument("-t", "--title")
+    sp.add_argument("-a", "--criteria", action="append", metavar="TEXT", help="acceptance criterion (repeatable)")
+    sp.add_argument("--criteria-file", help="one acceptance criterion per line")
+    sp.add_argument("-C", "--repo", help="repository to work in (default: cwd; created/initialised if needed)")
+    sp.add_argument("--base", help="base branch (default: current HEAD)")
+    sp.add_argument("-w", "--worker", default="claude_code", help="worker backend[:model], e.g. claude_code:claude-sonnet-5 (default: claude_code)")
+    sp.add_argument("-r", "--reviewer", default="codex", help="reviewer backend[:model], must differ from the worker (default: codex)")
+    sp.add_argument("--worker-effort", choices=["low", "medium", "high", "xhigh", "max"])
+    sp.add_argument("--reviewer-effort", choices=["low", "medium", "high", "xhigh", "max"])
+    sp.add_argument("--role", default="coder", help="worker role preset: coder | planner | tester | security | refactorer | docs")
+    sp.add_argument("--instructions", help="extra instructions appended to the worker's role brief")
+    sp.add_argument("-n", "--max-iterations", type=int, default=5)
+    sp.add_argument("--pass-score", type=float, default=9.0)
+    sp.add_argument("--scoring", choices=["weighted", "llm"], default="weighted")
+    sp.add_argument("--stop-if-no-progress", type=int, default=2, help="stop after N iterations without a higher score (0 = off)")
+    sp.add_argument("--budget", type=float, help="stop when cumulative cost (USD) exceeds this")
+    sp.add_argument("--on-success", choices=["pr", "merge", "none"], default="pr")
+    sp.add_argument("--require-tests", action="store_true", help="NACK a worker hand-off that did not run tests")
+    sp.add_argument("--ignore-verdict", action="store_true",
+                    help="decide on the score alone (by default a reviewer verdict of request_changes keeps iterating)")
+    sp.add_argument("--timeout", type=float, default=1800, help="seconds per agent invocation")
+    sp.add_argument("--dry-run", action="store_true", help="print the resolved task spec and exit")
+    sp.add_argument("--json", action="store_true")
+    sp.add_argument("-q", "--quiet", action="store_true")
+    sp.set_defaults(func=lambda a, _cfg=None: cmd_task_run(a), needs_config=False)
+
+    # -- tasks: inspect the task database
+    sp = sub.add_parser("tasks", help="list tasks, or show one (--logs for its event log)")
+    sp.add_argument("task_id", nargs="?")
+    sp.add_argument("--logs", action="store_true")
+    sp.add_argument("-n", "--limit", type=int, default=30)
+    sp.set_defaults(func=lambda a, _cfg=None: cmd_tasks(a), needs_config=False)
+
+    # -- web
+    sp = sub.add_parser("web", help="start the web UI (optionally with a Cloudflare tunnel)")
+    sp.add_argument("--host", default="127.0.0.1")
+    sp.add_argument("--port", type=int, default=0, help="0 = pick a free port")
+    sp.add_argument("--tunnel", action="store_true", help="expose via a Cloudflare quick tunnel (needs cloudflared)")
+    sp.add_argument("--no-open", action="store_true", help="do not try to open a browser")
+    sp.set_defaults(func=lambda a, _cfg=None: cmd_web(a), needs_config=False)
+
+    # -- init / agents (cao.yaml based)
+    sp = sub.add_parser("init", help="write an example cao.yaml (for 'flow' workflows)")
     sp.add_argument("path", nargs="?", help="destination (default: ./cao.yaml)")
     sp.add_argument("--force", action="store_true")
     sp.set_defaults(func=lambda a, _cfg=None: cmd_init(a), needs_config=False)
@@ -186,7 +352,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_agents, needs_config=True)
 
-    sp = sub.add_parser("run", help="run a goal through a workflow")
+    # -- flow: multi-agent strategies (parallel / pipeline / plan) from cao.yaml
+    flow = sub.add_parser("flow", help="multi-agent strategies (parallel / pipeline / plan) defined in cao.yaml")
+    fsub = flow.add_subparsers(dest="flow_command", required=True)
+
+    sp = fsub.add_parser("run", help="run a goal through a workflow")
     sp.add_argument("goal", nargs="*", help="the task / question (or use --goal-file / stdin)")
     sp.add_argument("-w", "--workflow", help="workflow name from cao.yaml")
     sp.add_argument("-a", "--agents", help="ad-hoc: comma-separated agent names (instead of --workflow)")
@@ -203,7 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-q", "--quiet", action="store_true", help="suppress progress lines on stderr")
     sp.set_defaults(func=cmd_run, needs_config=True)
 
-    sp = sub.add_parser("runs", help="list past runs in .cao/runs")
+    sp = fsub.add_parser("runs", help="list past flow runs in .cao/runs")
     sp.add_argument("-C", "--project-dir")
     sp.add_argument("-n", "--limit", type=int, default=20)
     sp.set_defaults(func=lambda a, _cfg=None: cmd_runs(a), needs_config=False)

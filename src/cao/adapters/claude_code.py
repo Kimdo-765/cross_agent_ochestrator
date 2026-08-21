@@ -11,12 +11,20 @@ from ..runner import ProcResult
 from .base import AgentAdapter
 
 
+READ_ONLY_TOOLS = ("Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch")
+
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
 class ClaudeCodeAdapter(AgentAdapter):
     """Runs ``claude --print --output-format json`` and reads the JSON envelope.
 
     options:
       permission_mode: acceptEdits | bypassPermissions | plan | default  (default: acceptEdits)
       max_turns: int
+      max_budget_usd: float          -> --max-budget-usd
+      tools: [..]                    -> --tools (restrict the built-in tool set)
+      session_persistence: bool      (default: false -> --no-session-persistence; every run is a clean context)
       allowed_tools: [..]            -> --allowedTools
       system_prompt: str             -> --system-prompt
       append_system_prompt: str      -> --append-system-prompt
@@ -33,8 +41,19 @@ class ClaudeCodeAdapter(AgentAdapter):
         argv += ["--permission-mode", str(o.get("permission_mode", "acceptEdits"))]
         if self.spec.model:
             argv += ["--model", self.spec.model]
+        if self.spec.effort:
+            argv += ["--effort", str(self.spec.effort)]
         if o.get("max_turns"):
             argv += ["--max-turns", str(o["max_turns"])]
+        if o.get("max_budget_usd"):
+            argv += ["--max-budget-usd", str(o["max_budget_usd"])]
+        if self.spec.read_only:
+            # Reviewer mode: only read-only built-ins exist at all, and edits are explicitly disallowed.
+            argv += ["--tools", *READ_ONLY_TOOLS, "--disallowedTools", "Edit", "Write", "NotebookEdit", "Bash"]
+        elif o.get("tools"):
+            argv += ["--tools", *[str(t) for t in o["tools"]]]
+        if not o.get("session_persistence", False):
+            argv.append("--no-session-persistence")
         if o.get("allowed_tools"):
             argv += ["--allowedTools", *[str(t) for t in o["allowed_tools"]]]
         if o.get("system_prompt"):

@@ -18,3 +18,7 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# cao runtime / docker
+workspace/
+.env

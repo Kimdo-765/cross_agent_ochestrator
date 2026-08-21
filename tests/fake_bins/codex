@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Fake Codex CLI: mimics `codex exec --json -o FILE -`."""
 import json, sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _fakeagent  # noqa: E402
+
 args = sys.argv[1:]
 if "--version" in args:
     print("codex-cli 0.0.0-fake"); sys.exit(0)
@@ -10,7 +13,8 @@ cwd = args[args.index("-C") + 1] if "-C" in args else os.getcwd()
 if "EDIT_FILE" in prompt:
     with open(os.path.join(cwd, "codex_was_here.txt"), "w") as fh:
         fh.write("hi\n")
-text = "[fake-codex] " + prompt.strip().splitlines()[0][:80]
+tag = "fake-grok" if "model_provider=xai" in " ".join(args) else "fake-codex"
+text = _fakeagent.respond(prompt, cwd, tag) or f"[{tag}] " + prompt.strip().splitlines()[0][:80]
 print(json.dumps({"type": "thread.started", "thread_id": "t1"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": text}}))
 print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}}))

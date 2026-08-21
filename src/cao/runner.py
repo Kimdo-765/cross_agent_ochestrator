@@ -63,6 +63,13 @@ async def run_process(
         timed_out = True
         proc.kill()
         out_b, err_b = await proc.communicate()
+    except asyncio.CancelledError:
+        # Caller was cancelled (task cancel / shutdown): never leave an agent process running.
+        proc.kill()
+        try:
+            await proc.wait()
+        finally:
+            raise
     duration = time.monotonic() - started
     stdout = out_b.decode(errors="replace")
     stderr = err_b.decode(errors="replace")

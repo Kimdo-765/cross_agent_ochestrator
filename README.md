@@ -1,168 +1,183 @@
 # cross-agent-orchestrator (`cao`)
 
-서로 다른 코딩 에이전트 CLI — **Claude Code**, **Codex**, **Gemini CLI**, 혹은 임의의 커맨드 — 를
-하나의 목표(goal)에 함께 투입하고 조율하는 오케스트레이터입니다.
+하나의 작업을 **여러 AI 코딩 에이전트가 역할을 나눠** 수행하고, **서로 다른 모델이 실제 `git diff`만 보고 교차 검증**하는
+오케스트레이터입니다. Worker가 구현 → Reviewer(다른 모델)가 0~10점 평가 → 기준 미달이면 피드백을 반영해 반복합니다.
+모든 과정은 Git 브랜치/워크트리 위에서 이루어지고, 이터레이션별 프롬프트·응답·점수·비용이 기록됩니다.
 
 ```
-cao run -w compare "이 저장소에서 가장 위험한 기술 부채는?"
-   ├─ claude ──┐
-   ├─ codex  ──┼─▶ synthesizer(claude) ─▶ 하나의 최종 답변 + 리포트
-   └─ gemini ──┘
+ Task(요청 + 수락 기준)
+   │
+   ▼  git worktree + branch  cao/<task-id>-<slug>
+ ┌──────────────────────────────────────────────────────────────┐
+ │  iteration N                                                 │
+ │   OFFER → ACK ─▶ Worker (clean context, 코드 수정)            │
+ │                   └─ 실제 diff 확인 → git commit → COMMIT     │
+ │   OFFER → ACK ─▶ Reviewer (다른 모델, read-only, diff만 전달)  │
+ │                   └─ JSON 점수(7개 항목) 파싱 → COMMIT         │
+ │   score ≥ 9.0 ─▶ PASS      else ─▶ 피드백을 다음 브리프에 반영  │
+ └──────────────────────────────────────────────────────────────┘
+   ▼
+ PR 생성 | base 브랜치에 머지 | 브랜치 유지  +  report.md / run.json
 ```
 
-## 왜 필요한가
+## 지원 백엔드
 
-- 같은 질문을 여러 에이전트에 던져 **교차 검증**하고 최선의 답을 합성합니다 (`parallel`).
-- 한 에이전트가 구현하고 다른 에이전트가 **리뷰·수정**하는 핸드오프를 자동화합니다 (`pipeline`).
-- 플래너가 큰 목표를 쪼개고, 워커들이 **각자의 git worktree에서 병렬로** 작업한 뒤 통합 리포트를 받습니다 (`plan`).
-- 모든 실행 로그·사용량·결과가 `.cao/runs/<run-id>/`에 남습니다.
+| 백엔드 | `backend` 키 | 실행 방식 | 인증 |
+|---|---|---|---|
+| Claude Code | `claude_code` | `claude -p --output-format json` (`--effort`, 리뷰어는 `--tools Read,Grep,Glob…`) | `claude login` 또는 `ANTHROPIC_API_KEY` |
+| Codex (OpenAI) | `codex` | `codex exec --json` (`model_reasoning_effort`, 리뷰어는 `--sandbox read-only`) | `codex login` 또는 `OPENAI_API_KEY` |
+| Grok (xAI) | `grok` | Codex CLI + xAI OpenAI-호환 프로바이더(`model_providers.xai`) | `XAI_API_KEY` |
+
+Worker와 Reviewer는 **반드시 다른 모델**이어야 합니다(같은 백엔드라도 모델이 다르면 허용, 동일하면 거부).
 
 ## 설치
 
 ```sh
-pip install -e .          # 개발 설치 (저장소 루트에서)
-# 또는
-pipx install git+https://github.com/Kimdo-765/cross_agent_ochestrator.git
+git clone https://github.com/Kimdo-765/cross_agent_ochestrator.git && cd cross_agent_ochestrator
+pip install -e ".[web]"          # CLI + Web UI
+claude --version && codex --version   # 사용할 에이전트 CLI가 PATH에 있어야 함
 ```
 
-요구 사항: Python 3.10+, 그리고 사용하려는 에이전트 CLI가 PATH에 있고 로그인되어 있어야 합니다.
+## 빠른 시작 — Web UI (Docker)
 
-| 에이전트 | `type` | 실행 방식 | 설치 |
-|---|---|---|---|
-| Claude Code | `claude_code` | `claude -p --output-format json` | `npm i -g @anthropic-ai/claude-code` |
-| Codex CLI | `codex` | `codex exec --json -o …` | `npm i -g @openai/codex` |
-| Gemini CLI | `gemini` | `gemini -p …` | `npm i -g @google/gemini-cli` |
-| 아무 커맨드 | `shell` | `options.command` 템플릿 | — |
+```sh
+cp .env.example .env             # CAO_WORKSPACE(에이전트가 작업할 저장소들의 상위 폴더), API 키 등 설정
+./scripts/start.sh               # 빈 로컬 포트 자동 선택 → 빌드 → web + cloudflared 기동
+```
 
-## 빠른 시작
+출력 예:
+```
+cao web UI (local):  http://127.0.0.1:18765
+access token:        Qm4…   (sign in: http://127.0.0.1:18765/login?token=Qm4…)
+cloudflare tunnel:   https://random-words.trycloudflare.com
+remote sign-in:      https://random-words.trycloudflare.com/login?token=Qm4…
+```
+
+- 호스트의 `~/.claude`, `~/.codex`가 컨테이너에 마운트되므로 호스트에서 로그인돼 있으면 추가 설정이 필요 없습니다.
+- 터널은 기본이 **퀵 터널**(계정 불필요, URL은 매번 바뀜). 고정 주소가 필요하면 `.env`의 `CLOUDFLARE_TUNNEL_TOKEN`에 네임드 터널 토큰을 넣으세요.
+- 외부에서 접근 가능한 순간부터 **접근 토큰**이 강제됩니다(`CAO_AUTH_TOKEN` 미설정 시 자동 생성·출력).
+- Docker 없이: `./scripts/start.sh --native` (로컬 `cloudflared` 필요) 또는 `cao web --tunnel`.
+
+## 빠른 시작 — CLI
 
 ```sh
 cd my-project
-cao init                # cao.yaml 예제 생성
-cao agents --versions   # CLI 설치/로그인 상태 확인
-cao run -w compare "Explain the auth flow in this repo and point out risks."
+cao run -w claude_code -r codex \
+        -a "POST /items returns 201 with the created id" \
+        -a "unit tests cover validation errors" \
+        --role coder --worker-effort high --reviewer-effort high \
+        -n 5 --pass-score 9 --on-success pr \
+        "Add a create-item endpoint to the FastAPI app"
 ```
 
-설정 파일 없이 즉석으로도 실행할 수 있습니다:
-
-```sh
-cao run -a claude,codex                 "Reply with one word: pong"        # parallel (기본)
-cao run -a codex,claude -s pipeline     "Add type hints to utils.py"       # codex 구현 → claude 리뷰
-cao run -a claude,codex -s plan         "Split the monolith module into a package"
+```
+[cao] task 20260821-1940-fa91 'Add a create-item endpoint…' -- worker=claude_code:default reviewer=codex:default
+[cao] worktree …/.cao/worktrees/20260821-1940-fa91 on branch cao/20260821-1940-fa91-add-a-create-item (base main @ e241cba38c)
+[cao] [iter 1] worker   OFFER  brief -> claude_code:default (role=coder, attempt 1)
+[cao] [iter 1] worker   ACK    worker ready; workspace clean context
+[cao] [iter 1] worker   COMMIT committed ca31417a4b;  3 files changed, 84 insertions(+)
+[cao] [iter 1] reviewer OFFER  diff (3120 chars) -> codex:default read-only (attempt 1)
+[cao] [iter 1] reviewer ACK    reviewer ready; diff-only, read-only
+[cao] [iter 1] reviewer COMMIT score weighted=7.85 llm=8.0 issues=2 verdict=request_changes
+[cao] [iter 1] score 7.85/10 -> ITERATE (7.85 < 9.0)
+[cao] [iter 2] … score 9.30/10 -> PASS (9.30 >= 9.0)
+[cao] [iter 2] finish   COMMIT PR opened: https://github.com/…/pull/12
 ```
 
-## 설정 (`cao.yaml`)
+자주 쓰는 옵션: `-C <repo>`(없으면 `git init`까지 수행) · `--base <branch>` · `--scoring weighted|llm` · `--stop-if-no-progress N` ·
+`--budget <USD>` · `--require-tests` · `--on-success pr|merge|none` · `--dry-run` · `--json`.
+`cao tasks` / `cao tasks <id> --logs` 로 기록을 조회합니다.
 
-```yaml
-defaults:
-  timeout: 1800          # 에이전트 1회 실행 제한(초)
-  isolation: worktree    # shared | worktree | none
-  synthesizer: claude    # parallel/plan 결과를 합치는 에이전트
+## 핵심 개념
 
-agents:
-  claude:
-    type: claude_code
-    model: claude-sonnet-5          # 생략 시 CLI 기본값
-    tags: [review, architecture]    # 플래너가 작업 배정 시 참고
-    options:
-      permission_mode: acceptEdits
-      max_turns: 40
-  codex:
-    type: codex
-    tags: [implementation]
-    options:
-      sandbox: workspace-write
-  my-agent:                          # 임의 커맨드도 에이전트로
-    type: shell
-    options:
-      command: ["my-agent", "--task", "{prompt}"]   # {prompt} {workdir} {task_id} {model}
-      prompt_via: arg                                # 또는 stdin
-
-workflows:
-  compare:
-    strategy: parallel
-    agents: [claude, codex]
-    isolation: none                  # 질의응답이면 저장소 접근 불필요
-    prompt: "{goal}"
-
-  implement-then-review:
-    strategy: pipeline
-    isolation: shared
-    steps:
-      - agent: codex
-        prompt: "Implement: {goal}. End with a summary."
-      - agent: claude
-        prompt: "Review the diff for: {goal}\n\nImplementer said:\n{previous}"
-
-  build:
-    strategy: plan
-    planner: claude
-    workers: [claude, codex]
-    synthesizer: claude
-    max_tasks: 5
-```
-
-`${ENV_VAR}` / `${ENV_VAR:-default}` 문법으로 환경 변수를 참조할 수 있습니다.
-
-### 전략
-
-| strategy | 동작 | `{placeholder}` |
-|---|---|---|
-| `parallel` | 같은 프롬프트를 `agents` 전부에 동시 실행 → `synthesizer`가 비교·합성 | `{goal}` |
-| `pipeline` | `steps`를 순서대로 실행, 이전 단계 출력이 다음 단계 입력 | `{goal}`, `{previous}` |
-| `plan` | `planner`가 JSON 작업 목록 생성 → `workers`에 분배·병렬 실행 → `synthesizer`가 통합 리포트 | (플래너 프롬프트 내장) |
-
-### 격리(isolation)
-
-| 값 | 의미 |
+| 개념 | 구현 |
 |---|---|
-| `shared` | 프로젝트 디렉토리에서 직접 실행. 순차(pipeline)에 적합 |
-| `worktree` | 작업마다 `cao/<run-id>/<task>` 브랜치 + git worktree 생성. 병렬 편집에 안전. 브랜치는 남겨두므로 `git diff HEAD..cao/...`로 검토 후 머지 |
-| `none` | 임시 디렉토리에서 실행(저장소 접근 없음). 순수 Q&A용 |
+| **Task** | 요청 + 수락 기준(acceptance criteria) + worker/reviewer 설정 + 루프 설정 (`TaskSpec`) |
+| **Worker** | 코드를 실제로 수정하는 에이전트. 매 이터레이션 **새 프로세스 = 깨끗한 컨텍스트**. 역할 프리셋: `coder` `planner` `tester` `security` `refactorer` `docs` + 자유 지시문 |
+| **Reviewer** | Worker와 다른 모델. **읽기 전용**으로 실행되며 프롬프트에는 Worker의 요약이 아닌 **실제 `git diff <base>..HEAD`** 만 들어감. 7개 항목 0~10점 + 이슈 목록 JSON 반환 |
+| **Orchestrator** | 워크트리/브랜치 생성, 핸드셰이크, 커밋, 점수 판정, 조기 종료, PR/머지, 로그·비용 기록 (`LoopEngine`) |
+| **Handshake** | 모든 핸드오프가 `OFFER → ACK/NACK → COMMIT`. ACK/COMMIT은 에이전트의 주장이 아니라 **검증 가능한 사실**(CLI 존재, 모델 상이, diff 비어있지 않음, JSON 파싱 성공, 리뷰어가 파일을 건드리지 않음)로만 결정. NACK 시 재OFFER(`handshake_retries`) |
+| **Iteration** | Worker → diff → commit → Reviewer → score → 판정. 이터레이션별 `worker.prompt.md`, `worker.response.md`, `diff.patch`, `review.prompt.md`, `review.json` 저장 |
+
+### 리뷰 평가 항목과 점수
+
+| 항목 | 기본 가중치 |
+|---|---|
+| 요구사항 충족도 (`requirements`) | 2.0 |
+| 코드 정확성 / 버그 가능성 (`correctness`) | 2.0 |
+| 보안 이슈 (`security`) | 1.5 |
+| 기존 스타일 / 아키텍처 일관성 (`consistency`) | 1.0 |
+| 테스트 커버리지 (`tests`) | 1.5 |
+| 불필요한 변경 여부 (`minimality`) | 0.5 |
+| 기존 기능 정상 작동 (`regression`) | 1.5 |
+
+최종 점수는 `scoring: weighted`(가중 평균, 가중치 조정 가능) 또는 `scoring: llm`(리뷰어의 종합 점수). `blocker` 이슈가 있으면 6점을 넘지 못하고,
+리뷰어 verdict가 `request_changes`면 통과선 바로 아래로 캡핑됩니다(`respect_verdict`, 끄려면 `--ignore-verdict`).
+**≥ pass_score(기본 9.0) → 완료**, 미만이면 이슈 목록이 우선순위대로 다음 Worker 브리프에 들어갑니다.
+
+### 종료 조건
+
+- 통과: `score ≥ pass_score`
+- `max_iterations` 도달 → `exhausted`
+- `stop_if_no_progress` 이터레이션 동안 점수 개선 없음 → `stopped`
+- `budget_usd` 초과 → `stopped` (CLI가 비용을 보고하는 경우; Claude Code는 USD, Codex는 토큰)
+- 핸드셰이크 재시도 소진(Worker가 아무것도 바꾸지 않음 / `blocked` / Reviewer JSON 불량 등) → `failed`
 
 ## 결과물
 
 ```
-.cao/runs/20260821-191500-c116/
-├── goal.md
-├── plan.json          # plan 전략일 때
-├── logs/              # 에이전트별 stdout/stderr 전체 기록
-├── report.json        # 구조화된 결과 (usage/cost 포함)
-└── report.md          # 사람이 읽는 리포트
+<repo>/.cao/
+├── worktrees/<task-id>/           # Worker가 작업한 워크트리 (브랜치 cao/<task-id>-<slug>)
+└── tasks/<task-id>/
+    ├── iteration-01/
+    │   ├── worker.prompt.md  worker.response.md  diff.patch
+    │   ├── review.prompt.md  review.response.md  review.json
+    │   └── logs/             # CLI stdout/stderr 원본
+    ├── report.md             # 사람이 읽는 요약 (PR 본문으로도 사용)
+    └── run.json              # 전체 상태 (이터레이션, 핸드셰이크 이벤트, 비용, 토큰)
+~/.cao/cao.db                 # SQLite: 작업/이터레이션/로그 (Web UI와 CLI가 공유)
 ```
 
-`cao runs` 로 과거 실행 목록을, `cao run --json` 으로 결과를 JSON으로 받을 수 있습니다.
+## Web UI
 
-## 어댑터 확장
+- **New task**: 요청·수락 기준·저장소 경로(브라우저로 선택, 없으면 생성)·Worker(백엔드/모델/effort/역할/추가 지시)·Reviewer(백엔드/모델/effort)·루프 설정. 같은 모델을 고르면 즉시 경고.
+- **Task 상세**: 이터레이션 카드(7개 항목 점수 바, 이슈, diff, 핸드셰이크 이벤트, Worker/Reviewer 프롬프트·응답·비용), 실시간 로그(SSE), 취소/재실행/복제/삭제, PR 링크.
+- REST API: `/api/docs` (OpenAPI). 예: `POST /api/tasks`, `GET /api/tasks/{id}/events`(SSE), `GET /api/tasks/{id}/iterations/{n}/diff`.
 
-```python
-from cao.adapters import register, AgentAdapter
+## 설정 레퍼런스 (API / `--dry-run` 출력 형식)
 
-@register
-class MyAdapter(AgentAdapter):
-    key = "my_agent"        # cao.yaml 의 type:
-    binary = "my-agent"
-
-    def build_command(self, task, workdir, run_dir):
-        return [self.executable(), "--prompt", task.prompt], None   # (argv, stdin)
-
-    def parse_output(self, proc, run_dir):
-        return proc.stdout.strip(), {}, {}                          # (text, usage, raw)
+```json
+{
+  "title": "Add create-item endpoint",
+  "request": "…",
+  "acceptance_criteria": ["…", "…"],
+  "repo_path": "/workspace/my-project",
+  "base_branch": null,
+  "worker":   {"backend": "claude_code", "model": null, "effort": "high", "role": "coder", "instructions": "", "timeout": 1800},
+  "reviewer": {"backend": "codex", "model": null, "effort": "high", "role": "reviewer", "timeout": 1800},
+  "loop": {"max_iterations": 5, "pass_score": 9.0, "scoring": "weighted", "weights": {"tests": 2.0},
+           "stop_if_no_progress": 2, "budget_usd": null, "on_success": "pr", "handshake_retries": 1, "require_tests": false}
+}
 ```
+
+## 다중 에이전트 플로우 (`cao flow`)
+
+리뷰 루프 외에, `cao.yaml`로 정의하는 병렬/파이프라인/플랜 전략도 제공합니다:
+`cao init` → `cao agents` → `cao flow run -w compare "질문"`. 자세한 건 `cao flow run --help`.
 
 ## 개발
 
 ```sh
 pip install -e ".[dev]"
-pytest -q      # 실제 CLI 없이 tests/fake_bins 의 가짜 claude/codex 로 검증
+pytest -q          # 실제 CLI 없이 tests/fake_bins 의 가짜 claude/codex 로 루프 전체를 검증 (59 tests)
 ```
 
 ## 로드맵
 
-- [ ] `debate` 전략 (에이전트 간 상호 비평 라운드)
-- [ ] worktree 브랜치 자동 머지 / 충돌 리포트
-- [ ] 실행 중 스트리밍 출력(`stream-json`) 표시
-- [ ] 에이전트별 비용 상한 및 재시도 정책
+- [ ] Reviewer 2인 합의(서로 다른 두 모델의 평균/최소 점수)
+- [ ] Worker 역할을 이터레이션마다 바꾸는 시퀀스(planner → coder → tester)
+- [ ] 워크트리 정리 명령(`cao gc`) 및 브랜치 일괄 삭제
+- [ ] 스트리밍(`stream-json`)으로 에이전트 진행 상황 실시간 표시
 
 ## 라이선스
 

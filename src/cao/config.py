@@ -155,7 +155,7 @@ def _parse_agent(name: str, raw: Any, default_timeout: float) -> AgentSpec:
         raise ConfigError(f"agent '{name}' must be a mapping")
     if "type" not in raw:
         raise ConfigError(f"agent '{name}' is missing required key 'type'")
-    known = {"type", "model", "timeout", "env", "options", "tags"}
+    known = {"type", "model", "effort", "read_only", "timeout", "env", "options", "tags"}
     unknown = set(raw) - known
     if unknown:
         raise ConfigError(f"agent '{name}': unknown key(s) {sorted(unknown)} (adapter knobs go under 'options:')")
@@ -163,6 +163,8 @@ def _parse_agent(name: str, raw: Any, default_timeout: float) -> AgentSpec:
         name=name,
         type=str(raw["type"]),
         model=raw.get("model"),
+        effort=str(raw["effort"]) if raw.get("effort") else None,
+        read_only=bool(raw.get("read_only", False)),
         timeout=float(raw.get("timeout", default_timeout)),
         env={str(k): str(v) for k, v in (raw.get("env") or {}).items()},
         options=dict(raw.get("options") or {}),

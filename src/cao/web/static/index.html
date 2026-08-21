@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cao · cross-agent orchestrator</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⟲</text></svg>">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">⟲ <b>cao</b> <span class="muted">cross-agent orchestrator</span></a>
+  <div id="backends" class="chips"></div>
+  <div class="spacer"></div>
+  <span id="tunnel" class="muted small"></span>
+  <button id="btn-new" class="btn primary">+ New task</button>
+</header>
+
+<main id="view"></main>
+
+<!-- ---------- templates ---------- -->
+<template id="tpl-list">
+  <section class="list">
+    <div class="list-head">
+      <h1>Tasks</h1>
+      <span class="muted small" id="list-count"></span>
+    </div>
+    <table class="tasks">
+      <thead><tr><th>status</th><th>title</th><th>worker → reviewer</th><th>iter</th><th>score</th><th>cost</th><th>updated</th></tr></thead>
+      <tbody id="task-rows"></tbody>
+    </table>
+    <p id="list-empty" class="muted hidden">No tasks yet — create one with <b>+ New task</b>.</p>
+  </section>
+</template>
+
+<template id="tpl-form">
+  <section class="form">
+    <h1>New task</h1>
+    <form id="task-form" autocomplete="off">
+      <div class="grid2">
+        <div class="card span2">
+          <h2>Task</h2>
+          <label>Title <input name="title" placeholder="Short name (defaults to the first line of the request)"></label>
+          <label>Request <span class="req">*</span>
+            <textarea name="request" rows="6" required placeholder="What should be built or changed? Be concrete: files, behaviour, constraints."></textarea></label>
+          <label>Acceptance criteria <span class="muted small">(one per line — the reviewer checks every one)</span>
+            <textarea name="acceptance_criteria" rows="4" placeholder="- endpoint returns 404 for unknown ids&#10;- unit tests cover the new branch&#10;- no changes outside src/api"></textarea></label>
+          <div class="row">
+            <label class="grow">Repository path
+              <div class="inline"><input name="repo_path" required placeholder="/path/to/repo (created & git-initialised if missing)">
+              <button type="button" class="btn" id="btn-browse">Browse</button></div>
+              <div id="browse" class="browse hidden"></div>
+            </label>
+            <label>Base branch <input name="base_branch" placeholder="(current HEAD)"></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Worker <span class="muted small">writes the code</span></h2>
+          <label>Backend <select name="worker.backend" data-role="worker"></select></label>
+          <label>Model <input name="worker.model" list="models-worker" placeholder="(CLI default)"><datalist id="models-worker"></datalist></label>
+          <label>Effort <select name="worker.effort"></select></label>
+          <label>Role <select name="worker.role"></select></label>
+          <p class="muted small" id="role-brief"></p>
+          <label>Extra instructions <textarea name="worker.instructions" rows="3" placeholder="Optional. Appended to the role brief."></textarea></label>
+          <label>Timeout (s) <input name="worker.timeout" type="number" value="1800" min="60"></label>
+        </div>
+
+        <div class="card">
+          <h2>Reviewer <span class="muted small">different model · read-only · sees only the git diff</span></h2>
+          <label>Backend <select name="reviewer.backend" data-role="reviewer"></select></label>
+          <label>Model <input name="reviewer.model" list="models-reviewer" placeholder="(CLI default)"><datalist id="models-reviewer"></datalist></label>
+          <label>Effort <select name="reviewer.effort"></select></label>
+          <label>Timeout (s) <input name="reviewer.timeout" type="number" value="1800" min="60"></label>
+          <p id="cross-warn" class="warn hidden">⚠ Worker and reviewer resolve to the same model. Cross-model review is required.</p>
+          <details class="small"><summary>Scoring rubric (7 criteria)</summary><ul id="rubric"></ul></details>
+        </div>
+
+        <div class="card span2">
+          <h2>Loop</h2>
+          <div class="row wrap">
+            <label>Max iterations <input name="loop.max_iterations" type="number" value="5" min="1" max="50"></label>
+            <label>Pass score (≥) <input name="loop.pass_score" type="number" value="9" min="0" max="10" step="0.1"></label>
+            <label>Scoring <select name="loop.scoring"><option value="weighted">weighted average</option><option value="llm">reviewer's overall</option></select></label>
+            <label>Stop if no progress for <input name="loop.stop_if_no_progress" type="number" value="2" min="0"> iters (0 = off)</label>
+            <label>Budget (USD) <input name="loop.budget_usd" type="number" step="0.01" min="0" placeholder="unlimited"></label>
+            <label>On success <select name="loop.on_success"><option value="pr">open PR</option><option value="merge">merge into base</option><option value="none">leave branch</option></select></label>
+            <label>Hand-off retries <input name="loop.handshake_retries" type="number" value="1" min="0" max="5"></label>
+            <label class="check"><input name="loop.require_tests" type="checkbox"> NACK worker if it didn't run tests</label>
+            <label class="check"><input name="loop.respect_verdict" type="checkbox" checked> "request_changes" verdict keeps iterating even if the score passes</label>
+          </div>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn" id="btn-cancel-form">Cancel</button>
+        <button type="submit" class="btn primary" id="btn-submit">Start task</button>
+        <span id="form-error" class="error"></span>
+      </div>
+    </form>
+  </section>
+</template>
+
+<template id="tpl-detail">
+  <section class="detail">
+    <div class="detail-head">
+      <div>
+        <a href="/" class="muted small">← tasks</a>
+        <h1 id="d-title"></h1>
+        <div class="meta" id="d-meta"></div>
+      </div>
+      <div class="detail-actions">
+        <span id="d-status" class="pill"></span>
+        <span id="d-score" class="score-big"></span>
+        <button class="btn danger hidden" id="btn-cancel">Cancel</button>
+        <button class="btn hidden" id="btn-rerun">Re-run</button>
+        <button class="btn" id="btn-clone">Clone</button>
+        <button class="btn hidden" id="btn-delete">Delete</button>
+      </div>
+    </div>
+    <div class="detail-body">
+      <div class="iterations" id="iterations"></div>
+      <aside class="log-pane">
+        <div class="log-head"><b>Live log</b> <span class="muted small" id="log-state"></span></div>
+        <pre id="log"></pre>
+      </aside>
+    </div>
+  </section>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

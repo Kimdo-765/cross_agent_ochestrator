@@ -33,6 +33,8 @@ class AgentSpec:
     name: str
     type: str  # adapter key: claude_code | codex | gemini | shell
     model: Optional[str] = None
+    effort: Optional[str] = None  # low | medium | high | xhigh | max (mapped per backend)
+    read_only: bool = False  # reviewer mode: no file edits / no shell writes
     timeout: float = 1800.0  # seconds
     env: dict[str, str] = field(default_factory=dict)
     options: dict[str, Any] = field(default_factory=dict)  # adapter-specific knobs
@@ -42,6 +44,8 @@ class AgentSpec:
         bits = [self.type]
         if self.model:
             bits.append(f"model={self.model}")
+        if self.effort:
+            bits.append(f"effort={self.effort}")
         if self.tags:
             bits.append("tags=" + ",".join(self.tags))
         return " ".join(bits)

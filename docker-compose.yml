@@ -1,0 +1,62 @@
+# cao -- Docker Compose
+#
+#   cp .env.example .env        # set CAO_WORKSPACE (the repo(s) the agents may work on) and API keys
+#   ./scripts/start.sh          # picks a free local port, builds, starts web + cloudflared, prints URLs
+#
+# or by hand:
+#   CAO_HOST_PORT=18765 docker compose up -d --build
+#   docker compose logs -f cloudflared   # the https://*.trycloudflare.com URL appears here
+
+services:
+  web:
+    build: .
+    image: cao:local
+    container_name: cao-web
+    restart: unless-stopped
+    environment:
+      CAO_PORT: "8000"
+      CAO_DATA_DIR: /data
+      CAO_WORKSPACE: /workspace
+      # --- agent auth (either mount the CLI config dirs below, or pass keys) ---
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      GH_TOKEN: ${GH_TOKEN:-}                # for `on_success: pr`
+      CAO_TUNNEL_URL: ${CAO_TUNNEL_URL:-}    # shown in the UI header when set (named tunnels)
+      CAO_AUTH_TOKEN: ${CAO_AUTH_TOKEN:-}    # access token; generated (and printed in the logs) when empty
+    ports:
+      - "${CAO_HOST_BIND:-127.0.0.1}:${CAO_HOST_PORT:-8000}:8000"
+    volumes:
+      - ${CAO_WORKSPACE:-./workspace}:/workspace          # repositories the agents work on
+      - cao-data:/data                                      # task database + logs
+      - ${HOME}/.claude:/home/cao/.claude                   # Claude Code login/session (optional)
+      - ${HOME}/.codex:/home/cao/.codex                     # Codex login (optional)
+      - ${HOME}/.gitconfig:/home/cao/.gitconfig:ro          # your git identity for commits (optional)
+      - ${HOME}/.ssh:/home/cao/.ssh:ro                      # pushing branches / PRs over ssh (optional)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/meta"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cao-tunnel
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    # Quick tunnel (no account; random *.trycloudflare.com URL printed in the logs).
+    # For a stable hostname set CLOUDFLARE_TUNNEL_TOKEN in .env and the named tunnel is used instead.
+    command: >
+      sh -c 'if [ -n "$$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+               cloudflared tunnel --no-autoupdate run --token "$$CLOUDFLARE_TUNNEL_TOKEN" --url http://web:8000;
+             else
+               cloudflared tunnel --no-autoupdate --url http://web:8000;
+             fi'
+    environment:
+      CLOUDFLARE_TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    profiles: ["tunnel"]
+
+volumes:
+  cao-data:
