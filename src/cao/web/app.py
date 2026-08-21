@@ -19,6 +19,8 @@ from .. import __version__
 from ..adapters import make_adapter
 from ..loop.catalog import EFFORT_LEVELS, list_models
 from ..loop.engine import LoopEngine
+from ..loop.gitops import GitError
+from ..loop.repos import RepoUrlError, clone_repo, list_workspace_repos
 from ..loop.models import BACKENDS, RoleConfig, TaskRun, TaskSpec, TaskStatus
 from ..loop.review import CRITERIA, DEFAULT_WEIGHTS
 from ..loop.roles import list_roles
@@ -188,6 +190,9 @@ def create_app(store: Optional[Store] = None) -> FastAPI:
             "criteria": [{"key": k, "title": t, "weight": w, "description": d} for k, t, w, d in CRITERIA],
             "default_weights": DEFAULT_WEIGHTS,
             "workspace": workspace,
+            "in_docker": Path("/.dockerenv").exists(),
+            "gh_token": bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")),
+            "ssh_key": any((Path.home() / ".ssh" / n).exists() for n in ("id_ed25519", "id_rsa", "id_ecdsa")),
             "gh_available": shutil.which("gh") is not None,
             "cloudflared_available": shutil.which("cloudflared") is not None,
             "tunnel_url": os.environ.get("CAO_TUNNEL_URL"),
@@ -208,6 +213,34 @@ def create_app(store: Optional[Store] = None) -> FastAPI:
         loop = asyncio.get_running_loop()
         results = await asyncio.gather(*(loop.run_in_executor(None, lambda b=b: list_models(b, refresh=refresh)) for b in backends))
         return {cat.backend: cat.to_dict() for cat in results}
+
+    def _workspace() -> Path:
+        return Path(os.environ.get("CAO_WORKSPACE") or Path.cwd()).expanduser().resolve()
+
+    @app.get("/api/repos")
+    def repos() -> dict[str, Any]:
+        """Git repositories already present in the workspace."""
+        ws = _workspace()
+        return {"workspace": str(ws), "repos": list_workspace_repos(ws)}
+
+    @app.post("/api/repos/clone", status_code=201)
+    async def clone(request: Request) -> dict[str, Any]:
+        """Clone a remote repository (GitHub/GitLab https or ssh URL) into the workspace."""
+        body = await request.json()
+        url = str(body.get("url") or "").strip()
+        branch = (str(body.get("branch") or "").strip() or None)
+        name = (str(body.get("name") or "").strip() or None)
+        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None, lambda: clone_repo(url, _workspace(), name=name, branch=branch, token=token, timeout=float(os.environ.get("CAO_CLONE_TIMEOUT", "900")))
+            )
+        except RepoUrlError as exc:
+            raise HTTPException(400, str(exc))
+        except GitError as exc:
+            raise HTTPException(502, str(exc))
+        return result.to_dict()
 
     @app.get("/api/browse")
     def browse(path: str = "") -> dict[str, Any]:

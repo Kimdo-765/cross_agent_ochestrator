@@ -65,13 +65,29 @@
               <input id="f-base" name="base_branch" placeholder="current HEAD">
             </div>
             <div class="field span2">
-              <label for="f-repo">Repository</label>
-              <div class="input-group">
-                <input id="f-repo" name="repo_path" required placeholder="/path/to/repo">
-                <button type="button" class="btn" id="btn-browse">Browse…</button>
+              <div class="label-row">
+                <label for="f-repo">Repository</label>
+                <div class="seg" role="tablist">
+                  <button type="button" class="on" data-repo-mode="local">Local path</button>
+                  <button type="button" data-repo-mode="url">Git URL</button>
+                </div>
               </div>
-              <div id="browse" class="browse hidden"></div>
-              <p class="hint">A new directory is created and <code>git init</code>-ed; a repo without commits gets an initial commit.</p>
+              <div data-repo-pane="local">
+                <div class="input-group">
+                  <input id="f-repo" name="repo_path" required placeholder="/path/to/repo">
+                  <button type="button" class="btn" id="btn-browse">Browse…</button>
+                </div>
+                <div id="browse" class="browse hidden"></div>
+                <p class="hint" id="repo-hint">A new directory is created and <code>git init</code>-ed; a repo without commits gets an initial commit.</p>
+              </div>
+              <div data-repo-pane="url" class="hidden">
+                <div class="input-group">
+                  <input id="f-url" name="repo_url" placeholder="https://github.com/owner/repo  ·  git@github.com:owner/repo.git  ·  …/tree/branch" spellcheck="false">
+                  <input id="f-clone-branch" placeholder="branch (default)" class="narrow">
+                  <button type="button" class="btn primary" id="btn-clone">Clone</button>
+                </div>
+                <p class="hint" id="clone-status">Cloned into the workspace; the task then runs on that checkout and <em>Open a pull request</em> targets its origin.</p>
+              </div>
             </div>
           </div>
         </section>

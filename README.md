@@ -152,7 +152,10 @@ cao run -w claude_code -r codex \
 
 ## Web UI
 
-- **New task**: 요청·수락 기준·저장소 경로(브라우저로 선택, 없으면 생성)·Worker(백엔드/모델/effort/역할/추가 지시)·Reviewer(백엔드/모델/effort)·루프 설정. 같은 모델을 고르면 즉시 경고.
+- **New task**: 요청·수락 기준·저장소·Worker(백엔드/모델/effort/역할/추가 지시)·Reviewer(백엔드/모델/effort)·루프 설정. 같은 모델을 고르면 즉시 경고.
+  - 저장소는 **Local path**(Browse로 선택, 없으면 생성) 또는 **Git URL**(`https://github.com/owner/repo`, `git@github.com:owner/repo.git`, `…/tree/<branch>` 모두 가능) → **Clone**을 누르면 `CAO_WORKSPACE`(Docker: `/workspace`) 아래에 clone되고 경로·base 브랜치가 자동 입력됩니다. 같은 URL을 다시 clone하면 기존 체크아웃을 fetch 후 재사용. clone된 저장소는 `origin`이 있으므로 *Open a pull request*가 바로 동작합니다.
+  - 비공개 저장소: ssh URL + 마운트된 `~/.ssh` 키, 또는 `GH_TOKEN`(https; 토큰은 clone 시에만 사용되고 `.git/config`에는 남지 않음).
+  - CLI 동등 기능: `cao run --repo-url https://github.com/owner/repo [-C <clone할 디렉토리>] …`
 - **Task 상세**: 이터레이션 카드(7개 항목 점수 바, 이슈, diff, 핸드셰이크 이벤트, Worker/Reviewer 프롬프트·응답·비용), 실시간 로그(SSE), 취소/재실행/복제/삭제, PR 링크.
 - REST API: `/api/docs` (OpenAPI). 예: `POST /api/tasks`, `GET /api/tasks/{id}/events`(SSE), `GET /api/tasks/{id}/iterations/{n}/diff`.
 
@@ -181,7 +184,7 @@ cao run -w claude_code -r codex \
 
 ```sh
 pip install -e ".[dev]"
-pytest -q          # 실제 CLI 없이 tests/fake_bins 의 가짜 claude/codex 로 루프 전체를 검증 (67 tests)
+pytest -q          # 실제 CLI 없이 tests/fake_bins 의 가짜 claude/codex 로 루프 전체를 검증 (86 tests)
 ```
 
 ## 로드맵

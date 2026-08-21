@@ -59,9 +59,17 @@ table.tasks tr:hover td { background: var(--panel2); cursor: pointer; }
 .fields.cols4 { grid-template-columns: repeat(4, 1fr); }
 .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .field.span2 { grid-column: span 2; }
-.field > label { margin: 0; color: var(--fg); font-size: 12px; font-weight: 600; letter-spacing: .01em; }
+.field > label, .field .label-row > label { margin: 0; color: var(--fg); font-size: 12px; font-weight: 600; letter-spacing: .01em; }
 .field .opt { color: var(--muted); font-weight: normal; margin-left: 4px; }
-.hint { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.4; } .hint code { font-family: var(--mono); }
+.hint { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.4; } .hint code { font-family: var(--mono); } .hint a { color: var(--accent); }
+.hint .ok-mark { color: var(--ok); font-weight: 700; } .hint .busy { display: inline-block; animation: spin 1s linear infinite; color: var(--info); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.label-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg button { background: var(--bg); color: var(--muted); border: 0; padding: 3px 10px; font: 11.5px var(--sans); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--panel2); color: var(--fg); font-weight: 600; }
+.input-group > input.narrow { flex: 0 0 150px; }
 .callout { margin: 2px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--accent2); border-radius: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .callout:empty { display: none; }
 .req { color: var(--bad); }

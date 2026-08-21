@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -193,12 +194,27 @@ def cmd_task_run(args: argparse.Namespace) -> int:
 
     wb, wm = _parse_role(args.worker)
     rb, rm = _parse_role(args.reviewer)
+    repo_path = str(Path(args.repo or ".").resolve())
+    base_branch = args.base
+    if args.repo_url:
+        from .loop.gitops import GitError
+        from .loop.repos import RepoUrlError, clone_repo
+
+        workspace = Path(args.repo or os.environ.get("CAO_WORKSPACE") or ".").resolve()
+        try:
+            res = clone_repo(args.repo_url, workspace, branch=args.base, token=os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
+        except (RepoUrlError, GitError) as exc:
+            _eprint(f"error: {exc}")
+            return 2
+        _eprint(f"[cao] {'using existing clone' if res.existed else 'cloned'} {res.web_url} -> {res.path} (branch {res.default_branch})")
+        repo_path, base_branch = res.path, base_branch or res.default_branch
     spec = TaskSpec(
         title=args.title or request.strip().splitlines()[0][:60],
         request=request.strip(),
         acceptance_criteria=criteria,
-        repo_path=str(Path(args.repo or ".").resolve()),
-        base_branch=args.base,
+        repo_path=repo_path,
+        repo_url=args.repo_url,
+        base_branch=base_branch,
         worker=RoleConfig(backend=wb, model=wm, effort=args.worker_effort, role=args.role, instructions=args.instructions or "",
                           timeout=args.timeout),
         reviewer=RoleConfig(backend=rb, model=rm, effort=args.reviewer_effort, role="reviewer", timeout=args.timeout),
@@ -303,7 +319,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-t", "--title")
     sp.add_argument("-a", "--criteria", action="append", metavar="TEXT", help="acceptance criterion (repeatable)")
     sp.add_argument("--criteria-file", help="one acceptance criterion per line")
-    sp.add_argument("-C", "--repo", help="repository to work in (default: cwd; created/initialised if needed)")
+    sp.add_argument("-C", "--repo", help="repository to work in (default: cwd; created/initialised if needed). With --repo-url: the directory to clone into")
+    sp.add_argument("--repo-url", help="clone this GitHub/GitLab URL (https or ssh) into --repo / $CAO_WORKSPACE / cwd and work on the clone")
     sp.add_argument("--base", help="base branch (default: current HEAD)")
     sp.add_argument("-w", "--worker", default="claude_code", help="worker backend[:model], e.g. claude_code:claude-sonnet-5 (default: claude_code)")
     sp.add_argument("-r", "--reviewer", default="codex", help="reviewer backend[:model], must differ from the worker (default: codex)")
