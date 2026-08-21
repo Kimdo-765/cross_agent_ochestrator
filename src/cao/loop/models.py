@@ -11,7 +11,7 @@ from typing import Any, Optional
 from ..models import AgentSpec
 
 BACKENDS = ("claude_code", "codex", "grok")
-EFFORTS = ("low", "medium", "high", "xhigh", "max")
+EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # ultra: Codex-only; other backends clamp to max
 
 
 class TaskStatus(str, Enum):

@@ -42,7 +42,8 @@ class ClaudeCodeAdapter(AgentAdapter):
         if self.spec.model:
             argv += ["--model", self.spec.model]
         if self.spec.effort:
-            argv += ["--effort", str(self.spec.effort)]
+            effort = str(self.spec.effort).lower()
+            argv += ["--effort", effort if effort in EFFORT_LEVELS else "max"]  # e.g. codex-only "ultra" -> max
         if o.get("max_turns"):
             argv += ["--max-turns", str(o["max_turns"])]
         if o.get("max_budget_usd"):

@@ -81,6 +81,10 @@ input[type=number] { font-family: var(--mono); }
 .input-group > .addon:first-child { border-radius: 7px 0 0 7px; border-right: 0; }
 .input-group > .addon:last-child { border-radius: 0 7px 7px 0; border-left: 0; }
 .input-group > .btn { border-radius: 0 7px 7px 0; border-left: 0; white-space: nowrap; }
+.input-group > select { flex: 1; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.input-group > select.compact { flex: 0 0 150px; border-right: 0; }
+.input-group > select + input { flex: 1; border-radius: 0; border-left: 0; font-family: var(--mono); font-size: 12.5px; }
+select optgroup { color: var(--muted); font-style: normal; font-weight: 600; } select option { color: var(--fg); }
 .browse { margin-top: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; max-height: 220px; overflow: auto; font-family: var(--mono); font-size: 12px; }
 .browse div { padding: 5px 10px; cursor: pointer; border-bottom: 1px solid rgba(42,47,61,.5); } .browse div:hover { background: var(--panel2); } .browse .git { color: var(--ok); }
 .warn { color: var(--warn); background: rgba(255,180,84,.08); border: 1px solid rgba(255,180,84,.25); padding: 8px 10px; border-radius: 7px; font-size: 12px; margin: 0 0 8px; }

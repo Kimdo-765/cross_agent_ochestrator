@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..adapters import make_adapter
-from ..adapters.claude_code import EFFORT_LEVELS
+from ..loop.catalog import EFFORT_LEVELS, list_models
 from ..loop.engine import LoopEngine
 from ..loop.models import BACKENDS, RoleConfig, TaskRun, TaskSpec, TaskStatus
 from ..loop.review import CRITERIA, DEFAULT_WEIGHTS
@@ -35,24 +35,9 @@ button{width:100%;padding:9px;background:#5b9cff;border:0;border-radius:6px;font
 <input name="token" placeholder="access token" autofocus><button>Sign in</button></form>"""
 
 BACKEND_META = {
-    "claude_code": {
-        "title": "Claude Code",
-        "binary": "claude",
-        "models": ["", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
-        "auth": "claude login  (or ANTHROPIC_API_KEY)",
-    },
-    "codex": {
-        "title": "Codex (OpenAI)",
-        "binary": "codex",
-        "models": ["", "gpt-5-codex", "gpt-5", "o4-mini"],
-        "auth": "codex login  (or OPENAI_API_KEY)",
-    },
-    "grok": {
-        "title": "Grok (xAI via Codex CLI)",
-        "binary": "codex",
-        "models": ["grok-code-fast-1", "grok-4", "grok-4-fast"],
-        "auth": "XAI_API_KEY",
-    },
+    "claude_code": {"title": "Claude Code", "binary": "claude", "auth": "claude login  (or ANTHROPIC_API_KEY)"},
+    "codex": {"title": "Codex (OpenAI)", "binary": "codex", "auth": "codex login  (or OPENAI_API_KEY)"},
+    "grok": {"title": "Grok (xAI via Codex CLI)", "binary": "codex", "auth": "XAI_API_KEY"},
 }
 
 
@@ -135,8 +120,7 @@ def _backend_status() -> list[dict[str, Any]]:
             ok, detail = adapter.is_available()
         except Exception as exc:  # pragma: no cover
             ok, detail = False, str(exc)
-        out.append({"key": key, "title": meta["title"], "available": ok, "detail": detail,
-                    "models": meta["models"], "auth": meta["auth"]})
+        out.append({"key": key, "title": meta["title"], "available": ok, "detail": detail, "auth": meta["auth"]})
     return out
 
 
@@ -214,6 +198,16 @@ def create_app(store: Optional[Store] = None) -> FastAPI:
                          "on_success": "pr", "handshake_retries": 1},
             },
         }
+
+    @app.get("/api/models")
+    async def models(backend: str = "", refresh: bool = False) -> dict[str, Any]:
+        """Model catalog per backend (local CLI caches + vendor APIs when keys are present)."""
+        backends = [backend] if backend else list(BACKENDS)
+        if any(b not in BACKENDS for b in backends):
+            raise HTTPException(404, f"unknown backend '{backend}'")
+        loop = asyncio.get_running_loop()
+        results = await asyncio.gather(*(loop.run_in_executor(None, lambda b=b: list_models(b, refresh=refresh)) for b in backends))
+        return {cat.backend: cat.to_dict() for cat in results}
 
     @app.get("/api/browse")
     def browse(path: str = "") -> dict[str, Any]:

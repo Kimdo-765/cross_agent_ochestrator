@@ -78,6 +78,17 @@
   }
 
   // ---------------------------------------------------------------- form
+  const CATALOG = {}; // backend -> catalog from /api/models
+  const SOURCE_LABEL = { 'codex-cache': 'Detected by Codex CLI', 'codex-config': 'From ~/.codex/config.toml', api: 'From vendor API', static: 'Known models', alias: 'Aliases' };
+  const CUSTOM = '__custom__';
+
+  async function loadCatalog(backend, refresh = false) {
+    if (CATALOG[backend] && !refresh) return CATALOG[backend];
+    const data = await api(`/api/models?backend=${encodeURIComponent(backend)}${refresh ? '&refresh=1' : ''}`);
+    CATALOG[backend] = data[backend];
+    return CATALOG[backend];
+  }
+
   function renderForm(prefill = null) {
     use('#tpl-form');
     const form = $('#task-form');
@@ -87,20 +98,80 @@
       fill(sel, META.backends.map((b) => ({ value: b.key, label: `${b.title}${b.available ? '' : '  (not available: ' + b.detail + ')'}` })),
         d[sel.dataset.role].backend);
     }
-    for (const name of ['worker.effort', 'reviewer.effort']) {
-      fill(form.elements[name], [{ value: '', label: '(CLI default)' }, ...META.efforts.map((e) => ({ value: e, label: e }))], d[name.split('.')[0]].effort || '');
-    }
     fill(form.elements['worker.role'], META.roles.map((r) => ({ value: r.key, label: r.title })), d.worker.role);
     $('#rubric').replaceChildren(...META.criteria.map((c) => el('tr', {}, el('td', {}, c.title), el('td', {}, `×${c.weight}`), el('td', {}, c.description))));
     form.elements.repo_path.value = META.workspace;
 
-    const syncModels = () => {
-      for (const role of ['worker', 'reviewer']) {
-        const b = META.backends.find((x) => x.key === form.elements[`${role}.backend`].value);
-        $(`#models-${role}`).replaceChildren(...(b?.models || []).filter(Boolean).map((m) => el('option', { value: m })));
+    // ---- model picker per role: select (grouped by source) + custom input + refresh
+    const modelOf = (role) => {
+      const pick = form.elements[`${role}.model_pick`];
+      return pick.value === CUSTOM ? form.elements[`${role}.model`].value.trim() : pick.value;
+    };
+    const fillModels = (role, cat, keep) => {
+      const pick = form.elements[`${role}.model_pick`];
+      const groups = new Map();
+      for (const m of cat.models) {
+        const key = SOURCE_LABEL[m.source] || m.source;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(m);
       }
-      const w = { backend: form.elements['worker.backend'].value, model: form.elements['worker.model'].value };
-      const r = { backend: form.elements['reviewer.backend'].value, model: form.elements['reviewer.model'].value };
+      const nodes = [el('option', { value: '' }, 'CLI default' + (cat.models.find((m) => m.is_default) ? ` (${cat.models.find((m) => m.is_default).id})` : ''))];
+      for (const [label, ms] of groups) {
+        nodes.push(el('optgroup', { label }, ...ms.map((m) => el('option', { value: m.id },
+          `${m.label && m.label !== m.id ? m.label + '  ·  ' : ''}${m.id}${m.efforts ? '  (' + m.efforts.join('/') + ')' : ''}`))));
+      }
+      nodes.push(el('option', { value: CUSTOM }, 'Custom model id…'));
+      pick.replaceChildren(...nodes);
+      const known = keep && cat.models.some((m) => m.id === keep);
+      pick.value = keep ? (known ? keep : CUSTOM) : '';
+      if (keep && !known) form.elements[`${role}.model`].value = keep;
+      syncCustom(role);
+      const hint = $(`[data-model-hint="${role}"]`);
+      hint.replaceChildren(`${cat.models.length} models · ${cat.sources.join(' + ')}`,
+        ...(cat.warnings.length ? [el('span', { class: 'muted', title: cat.warnings.join('\n') }, ' · (i)')] : []));
+    };
+    const syncCustom = (role) => {
+      const pick = form.elements[`${role}.model_pick`];
+      const custom = form.elements[`${role}.model`];
+      const isCustom = pick.value === CUSTOM;
+      custom.classList.toggle('hidden', !isCustom);
+      pick.classList.toggle('compact', isCustom);
+      if (isCustom) custom.focus();
+    };
+    const syncEfforts = (role) => {
+      const backend = form.elements[`${role}.backend`].value;
+      const cat = CATALOG[backend];
+      const model = modelOf(role);
+      const info = cat?.models.find((m) => m.id === model);
+      const levels = info?.efforts || cat?.efforts || META.efforts;
+      const sel = form.elements[`${role}.effort`];
+      const current = sel.value || d[role].effort || '';
+      const def = info?.default_effort;
+      fill(sel, [{ value: '', label: `CLI default${def ? ' (' + def + ')' : ''}` }, ...levels.map((e) => ({ value: e, label: e }))]);
+      sel.value = levels.includes(current) ? current : (levels.includes('high') ? 'high' : '');
+    };
+    const loadRole = async (role, refresh = false, keep = undefined) => {
+      const backend = form.elements[`${role}.backend`].value;
+      const hint = $(`[data-model-hint="${role}"]`);
+      hint.textContent = refresh ? 'discovering…' : 'loading…';
+      try {
+        const cat = await loadCatalog(backend, refresh);
+        fillModels(role, cat, keep ?? modelOf(role));
+      } catch (e) { hint.textContent = `could not load models: ${e.message}`; }
+      syncEfforts(role);
+      syncPairing();
+    };
+    for (const role of ['worker', 'reviewer']) {
+      form.elements[`${role}.backend`].addEventListener('change', () => loadRole(role, false, ''));
+      form.elements[`${role}.model_pick`].addEventListener('change', () => { syncCustom(role); syncEfforts(role); syncPairing(); });
+      form.elements[`${role}.model`].addEventListener('input', () => { syncEfforts(role); syncPairing(); });
+      $(`[data-model-refresh="${role}"]`).onclick = () => loadRole(role, true);
+      fill(form.elements[`${role}.effort`], [{ value: '', label: 'CLI default' }, ...META.efforts.map((e) => ({ value: e, label: e }))], d[role].effort || '');
+    }
+
+    const syncPairing = () => {
+      const w = { backend: form.elements['worker.backend'].value, model: modelOf('worker') };
+      const r = { backend: form.elements['reviewer.backend'].value, model: modelOf('reviewer') };
       const same = identity(w) === identity(r);
       $('#cross-warn').classList.toggle('hidden', !same);
       const pairing = $('#pairing');
@@ -108,7 +179,6 @@
       pairing.replaceChildren(el('span', { class: 'ok-mark' }, '✓'), ' cross-model pair: ', el('code', {}, identity(w)), ' → ', el('code', {}, identity(r)));
     };
     const syncRole = () => { $('#role-brief').textContent = META.roles.find((r) => r.key === form.elements['worker.role'].value)?.brief || ''; };
-    form.addEventListener('input', syncModels);
     form.elements['worker.role'].addEventListener('change', syncRole);
 
     // repository browser
@@ -128,7 +198,9 @@
     $('#btn-cancel-form').onclick = () => navigate('/');
 
     if (prefill) applyPrefill(form, prefill);
-    syncModels(); syncRole();
+    syncRole(); syncPairing();
+    loadRole('worker', false, prefill?.worker?.model || '');
+    loadRole('reviewer', false, prefill?.reviewer?.model || '');
 
     form.onsubmit = async (ev) => {
       ev.preventDefault();
@@ -141,6 +213,7 @@
       $('#btn-submit').disabled = true;
       try {
         const body = collect(form);
+        for (const role of ['worker', 'reviewer']) body[role].model = modelOf(role) || null;
         const res = await api('/api/tasks', { method: 'POST', body: JSON.stringify({ ...body, start: true }) });
         navigate(`/tasks/${res.id}`);
       } catch (e) { $('#form-error').textContent = e.message; $('#btn-submit').disabled = false; }
@@ -149,7 +222,7 @@
   function collect(form) {
     const out = { worker: {}, reviewer: {}, loop: {} };
     for (const elm of form.elements) {
-      if (!elm.name) continue;
+      if (!elm.name || elm.name.endsWith('.model_pick')) continue;
       let v = elm.type === 'checkbox' ? elm.checked : elm.value;
       if (elm.type === 'number' && v !== '') v = Number(v);
       if (v === '') v = null;
@@ -163,7 +236,7 @@
     const set = (name, v) => { const e = form.elements[name]; if (!e || v == null) return; if (e.type === 'checkbox') e.checked = !!v; else e.value = v; };
     set('title', spec.title); set('request', spec.request); set('repo_path', spec.repo_path); set('base_branch', spec.base_branch);
     set('acceptance_criteria', (spec.acceptance_criteria || []).map((c) => `- ${c}`).join('\n'));
-    for (const role of ['worker', 'reviewer']) for (const k of ['backend', 'model', 'effort', 'role', 'instructions', 'timeout']) set(`${role}.${k}`, spec[role]?.[k]);
+    for (const role of ['worker', 'reviewer']) for (const k of ['backend', 'effort', 'role', 'instructions', 'timeout']) set(`${role}.${k}`, spec[role]?.[k]);
     for (const k of Object.keys(spec.loop || {})) set(`loop.${k}`, spec.loop[k]);
   }
 

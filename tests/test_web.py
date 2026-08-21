@@ -133,6 +133,23 @@ async def test_browse(client, tmp_path, git_repo):
     assert (await client.get("/api/browse", params={"path": str(tmp_path / "nope")})).status_code == 404
 
 
+async def test_models_endpoint(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "empty-codex"))
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    from cao.loop import catalog
+    catalog._cache.clear()
+    r = await client.get("/api/models")
+    assert r.status_code == 200
+    data = r.json()
+    assert set(data) == {"claude_code", "codex", "grok"}
+    assert any(m["id"] == "claude-opus-5" for m in data["claude_code"]["models"])
+    assert data["grok"]["models"][0]["id"] == "grok-code-fast-1"
+    one = (await client.get("/api/models", params={"backend": "codex", "refresh": "1"})).json()
+    assert list(one) == ["codex"] and one["codex"]["efforts"] == ["low", "medium", "high", "xhigh"]
+    assert (await client.get("/api/models", params={"backend": "nope"})).status_code == 404
+    catalog._cache.clear()
+
+
 async def test_spa_routes(client):
     for path in ("/", "/new", "/tasks/whatever"):
         r = await client.get(path)

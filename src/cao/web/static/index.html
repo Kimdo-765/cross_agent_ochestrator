@@ -86,7 +86,12 @@
               </div>
               <div class="field">
                 <label for="f-wm">Model</label>
-                <input id="f-wm" name="worker.model" list="models-worker" placeholder="CLI default"><datalist id="models-worker"></datalist>
+                <div class="input-group">
+                  <select id="f-wm" name="worker.model_pick" data-model-pick="worker"></select>
+                  <input name="worker.model" data-model-custom="worker" class="hidden" placeholder="model id, e.g. gpt-5.5" spellcheck="false">
+                  <button type="button" class="btn" data-model-refresh="worker" title="Re-discover models">↻</button>
+                </div>
+                <p class="hint" data-model-hint="worker"></p>
               </div>
               <div class="field">
                 <label for="f-we">Effort</label>
@@ -117,7 +122,12 @@
               </div>
               <div class="field">
                 <label for="f-rm">Model</label>
-                <input id="f-rm" name="reviewer.model" list="models-reviewer" placeholder="CLI default"><datalist id="models-reviewer"></datalist>
+                <div class="input-group">
+                  <select id="f-rm" name="reviewer.model_pick" data-model-pick="reviewer"></select>
+                  <input name="reviewer.model" data-model-custom="reviewer" class="hidden" placeholder="model id, e.g. gpt-5.5" spellcheck="false">
+                  <button type="button" class="btn" data-model-refresh="reviewer" title="Re-discover models">↻</button>
+                </div>
+                <p class="hint" data-model-hint="reviewer"></p>
               </div>
               <div class="field">
                 <label for="f-re">Effort</label>

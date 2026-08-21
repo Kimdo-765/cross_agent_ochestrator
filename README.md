@@ -30,6 +30,16 @@
 
 Worker와 Reviewer는 **반드시 다른 모델**이어야 합니다(같은 백엔드라도 모델이 다르면 허용, 동일하면 거부).
 
+**모델 목록**은 하드코딩이 아니라 발견(discovery)됩니다 (`cao.loop.catalog`, Web UI의 Model 드롭다운 / `GET /api/models`):
+
+| 백엔드 | 소스 (우선순위순) |
+|---|---|
+| Codex | `~/.codex/models_cache.json`(Codex CLI가 실제로 보여주는 모델 + 모델별 지원 effort + 기본 모델) → `OPENAI_API_KEY`가 있으면 OpenAI Models API → 정적 폴백 |
+| Claude Code | `anthropic` 패키지가 설치·인증돼 있으면 Anthropic Models API → 정적 목록(`claude-opus-5`, `claude-sonnet-5`, … + 별칭 `opus`/`sonnet`/`haiku`) |
+| Grok | `XAI_API_KEY`가 있으면 xAI Models API → 정적 폴백 |
+
+드롭다운에 없는 모델은 "Custom model id…"로 직접 입력할 수 있고, effort 목록은 선택한 모델이 지원하는 단계만 표시됩니다(Codex 최신 모델의 `max`/`ultra` 포함; 미지원 모델에 요청하면 지원 최고 단계로 자동 클램프).
+
 ## 설치
 
 ```sh
@@ -171,7 +181,7 @@ cao run -w claude_code -r codex \
 
 ```sh
 pip install -e ".[dev]"
-pytest -q          # 실제 CLI 없이 tests/fake_bins 의 가짜 claude/codex 로 루프 전체를 검증 (61 tests)
+pytest -q          # 실제 CLI 없이 tests/fake_bins 의 가짜 claude/codex 로 루프 전체를 검증 (67 tests)
 ```
 
 ## 로드맵

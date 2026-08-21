@@ -11,11 +11,30 @@ from ..runner import ProcResult
 from .base import AgentAdapter
 
 
-_EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh"}
+_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 
-def _codex_effort(level: str) -> str:
-    return _EFFORT_MAP.get(str(level).lower(), str(level))
+def _codex_effort(level: str, backend: str = "codex", model: Optional[str] = None) -> str:
+    """Clamp the requested effort to what this model supports (per ~/.codex/models_cache.json).
+
+    Every Codex model takes low..xhigh; newer ones add max/ultra. Asking an older model for
+    "ultra" would make the CLI exit with an error, so degrade to the highest supported level.
+    """
+    level = str(level).lower()
+    try:
+        from ..loop.catalog import efforts_for
+
+        supported = efforts_for(backend, model)
+    except Exception:
+        supported = list(_EFFORT_ORDER[:4])
+    if level in supported or level not in _EFFORT_ORDER:
+        return level
+    ranked = [e for e in _EFFORT_ORDER if e in supported]
+    if not ranked:
+        return level
+    idx = _EFFORT_ORDER.index(level)
+    lower = [e for e in ranked if _EFFORT_ORDER.index(e) <= idx]
+    return lower[-1] if lower else ranked[0]
 
 
 class CodexAdapter(AgentAdapter):
@@ -55,7 +74,7 @@ class CodexAdapter(AgentAdapter):
         if self.spec.model:
             argv += ["--model", self.spec.model]
         if self.spec.effort:
-            argv += ["-c", f"model_reasoning_effort={_codex_effort(self.spec.effort)}"]
+            argv += ["-c", f"model_reasoning_effort={_codex_effort(self.spec.effort, self.key, self.spec.model)}"]
         for k, v in self.provider_config().items():
             argv += ["-c", f"{k}={v}"]
         if o.get("profile"):
