@@ -91,7 +91,7 @@
       fill(form.elements[name], [{ value: '', label: '(CLI default)' }, ...META.efforts.map((e) => ({ value: e, label: e }))], d[name.split('.')[0]].effort || '');
     }
     fill(form.elements['worker.role'], META.roles.map((r) => ({ value: r.key, label: r.title })), d.worker.role);
-    $('#rubric').replaceChildren(...META.criteria.map((c) => el('li', {}, el('b', {}, c.title), ` (w=${c.weight}) — `, c.description)));
+    $('#rubric').replaceChildren(...META.criteria.map((c) => el('tr', {}, el('td', {}, c.title), el('td', {}, `×${c.weight}`), el('td', {}, c.description))));
     form.elements.repo_path.value = META.workspace;
 
     const syncModels = () => {
@@ -101,7 +101,11 @@
       }
       const w = { backend: form.elements['worker.backend'].value, model: form.elements['worker.model'].value };
       const r = { backend: form.elements['reviewer.backend'].value, model: form.elements['reviewer.model'].value };
-      $('#cross-warn').classList.toggle('hidden', identity(w) !== identity(r));
+      const same = identity(w) === identity(r);
+      $('#cross-warn').classList.toggle('hidden', !same);
+      const pairing = $('#pairing');
+      pairing.classList.toggle('hidden', same);
+      pairing.replaceChildren(el('span', { class: 'ok-mark' }, '✓'), ' cross-model pair: ', el('code', {}, identity(w)), ' → ', el('code', {}, identity(r)));
     };
     const syncRole = () => { $('#role-brief').textContent = META.roles.find((r) => r.key === form.elements['worker.role'].value)?.brief || ''; };
     form.addEventListener('input', syncModels);
@@ -129,6 +133,11 @@
     form.onsubmit = async (ev) => {
       ev.preventDefault();
       $('#form-error').textContent = '';
+      for (const [name, msg] of [['request', 'Describe what should be done.'], ['repo_path', 'Choose a repository path.']]) {
+        const elm = form.elements[name];
+        if (!elm.value.trim()) { $('#form-error').textContent = msg; elm.classList.add('touched'); elm.focus(); return; }
+      }
+      if (!$('#cross-warn').classList.contains('hidden')) { $('#form-error').textContent = 'Worker and reviewer must be different models.'; return; }
       $('#btn-submit').disabled = true;
       try {
         const body = collect(form);

@@ -35,66 +35,163 @@
 
 <template id="tpl-form">
   <section class="form">
-    <h1>New task</h1>
-    <form id="task-form" autocomplete="off">
-      <div class="grid2">
-        <div class="card span2">
-          <h2>Task</h2>
-          <label>Title <input name="title" placeholder="Short name (defaults to the first line of the request)"></label>
-          <label>Request <span class="req">*</span>
-            <textarea name="request" rows="6" required placeholder="What should be built or changed? Be concrete: files, behaviour, constraints."></textarea></label>
-          <label>Acceptance criteria <span class="muted small">(one per line — the reviewer checks every one)</span>
-            <textarea name="acceptance_criteria" rows="4" placeholder="- endpoint returns 404 for unknown ids&#10;- unit tests cover the new branch&#10;- no changes outside src/api"></textarea></label>
-          <div class="row">
-            <label class="grow">Repository path
-              <div class="inline"><input name="repo_path" required placeholder="/path/to/repo (created & git-initialised if missing)">
-              <button type="button" class="btn" id="btn-browse">Browse</button></div>
-              <div id="browse" class="browse hidden"></div>
-            </label>
-            <label>Base branch <input name="base_branch" placeholder="(current HEAD)"></label>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>Worker <span class="muted small">writes the code</span></h2>
-          <label>Backend <select name="worker.backend" data-role="worker"></select></label>
-          <label>Model <input name="worker.model" list="models-worker" placeholder="(CLI default)"><datalist id="models-worker"></datalist></label>
-          <label>Effort <select name="worker.effort"></select></label>
-          <label>Role <select name="worker.role"></select></label>
-          <p class="muted small" id="role-brief"></p>
-          <label>Extra instructions <textarea name="worker.instructions" rows="3" placeholder="Optional. Appended to the role brief."></textarea></label>
-          <label>Timeout (s) <input name="worker.timeout" type="number" value="1800" min="60"></label>
-        </div>
-
-        <div class="card">
-          <h2>Reviewer <span class="muted small">different model · read-only · sees only the git diff</span></h2>
-          <label>Backend <select name="reviewer.backend" data-role="reviewer"></select></label>
-          <label>Model <input name="reviewer.model" list="models-reviewer" placeholder="(CLI default)"><datalist id="models-reviewer"></datalist></label>
-          <label>Effort <select name="reviewer.effort"></select></label>
-          <label>Timeout (s) <input name="reviewer.timeout" type="number" value="1800" min="60"></label>
-          <p id="cross-warn" class="warn hidden">⚠ Worker and reviewer resolve to the same model. Cross-model review is required.</p>
-          <details class="small"><summary>Scoring rubric (7 criteria)</summary><ul id="rubric"></ul></details>
-        </div>
-
-        <div class="card span2">
-          <h2>Loop</h2>
-          <div class="row wrap">
-            <label>Max iterations <input name="loop.max_iterations" type="number" value="5" min="1" max="50"></label>
-            <label>Pass score (≥) <input name="loop.pass_score" type="number" value="9" min="0" max="10" step="0.1"></label>
-            <label>Scoring <select name="loop.scoring"><option value="weighted">weighted average</option><option value="llm">reviewer's overall</option></select></label>
-            <label>Stop if no progress for <input name="loop.stop_if_no_progress" type="number" value="2" min="0"> iters (0 = off)</label>
-            <label>Budget (USD) <input name="loop.budget_usd" type="number" step="0.01" min="0" placeholder="unlimited"></label>
-            <label>On success <select name="loop.on_success"><option value="pr">open PR</option><option value="merge">merge into base</option><option value="none">leave branch</option></select></label>
-            <label>Hand-off retries <input name="loop.handshake_retries" type="number" value="1" min="0" max="5"></label>
-            <label class="check"><input name="loop.require_tests" type="checkbox"> NACK worker if it didn't run tests</label>
-            <label class="check"><input name="loop.respect_verdict" type="checkbox" checked> "request_changes" verdict keeps iterating even if the score passes</label>
-          </div>
-        </div>
+    <div class="page-head">
+      <div>
+        <h1>New task</h1>
+        <p class="muted">A worker agent implements the request on its own branch; a different model reviews the real <code>git diff</code> and scores it 0–10. The loop repeats until the score passes.</p>
       </div>
-      <div class="actions">
+    </div>
+    <form id="task-form" autocomplete="off" novalidate>
+      <div class="stack">
+
+        <section class="card">
+          <header class="card-head"><span class="step">1</span><div><h2>Task</h2><p>What should be done, and how the reviewer will judge it.</p></div></header>
+          <div class="fields">
+            <div class="field span2">
+              <label for="f-request">Request <span class="req">*</span></label>
+              <textarea id="f-request" name="request" rows="5" required placeholder="What should be built or changed? Be concrete: files, behaviour, constraints."></textarea>
+            </div>
+            <div class="field span2">
+              <label for="f-criteria">Acceptance criteria</label>
+              <textarea id="f-criteria" name="acceptance_criteria" rows="3" placeholder="endpoint returns 404 for unknown ids&#10;unit tests cover the new branch&#10;no changes outside src/api"></textarea>
+              <p class="hint">One per line. The reviewer checks every item; unmet criteria cap the score.</p>
+            </div>
+            <div class="field">
+              <label for="f-title">Title</label>
+              <input id="f-title" name="title" placeholder="Defaults to the first line of the request">
+            </div>
+            <div class="field">
+              <label for="f-base">Base branch</label>
+              <input id="f-base" name="base_branch" placeholder="current HEAD">
+            </div>
+            <div class="field span2">
+              <label for="f-repo">Repository</label>
+              <div class="input-group">
+                <input id="f-repo" name="repo_path" required placeholder="/path/to/repo">
+                <button type="button" class="btn" id="btn-browse">Browse…</button>
+              </div>
+              <div id="browse" class="browse hidden"></div>
+              <p class="hint">A new directory is created and <code>git init</code>-ed; a repo without commits gets an initial commit.</p>
+            </div>
+          </div>
+        </section>
+
+        <div class="grid2">
+          <section class="card">
+            <header class="card-head"><span class="step">2</span><div><h2>Worker</h2><p>Writes the code. Fresh context every iteration.</p></div></header>
+            <div class="fields">
+              <div class="field">
+                <label for="f-wb">Backend</label>
+                <select id="f-wb" name="worker.backend" data-role="worker"></select>
+              </div>
+              <div class="field">
+                <label for="f-wm">Model</label>
+                <input id="f-wm" name="worker.model" list="models-worker" placeholder="CLI default"><datalist id="models-worker"></datalist>
+              </div>
+              <div class="field">
+                <label for="f-we">Effort</label>
+                <select id="f-we" name="worker.effort"></select>
+              </div>
+              <div class="field">
+                <label for="f-wt">Timeout</label>
+                <div class="input-group"><input id="f-wt" name="worker.timeout" type="number" value="1800" min="60" step="60"><span class="addon">sec</span></div>
+              </div>
+              <div class="field span2">
+                <label for="f-wr">Role</label>
+                <select id="f-wr" name="worker.role"></select>
+                <p class="callout" id="role-brief"></p>
+              </div>
+              <div class="field span2">
+                <label for="f-wi">Extra instructions <span class="opt">optional</span></label>
+                <textarea id="f-wi" name="worker.instructions" rows="2" placeholder="Appended to the role brief, e.g. “use parameterised queries”, “don't touch the migrations folder”."></textarea>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <header class="card-head"><span class="step">3</span><div><h2>Reviewer</h2><p>A different model. Read-only. Sees only the git diff.</p></div></header>
+            <div class="fields">
+              <div class="field">
+                <label for="f-rb">Backend</label>
+                <select id="f-rb" name="reviewer.backend" data-role="reviewer"></select>
+              </div>
+              <div class="field">
+                <label for="f-rm">Model</label>
+                <input id="f-rm" name="reviewer.model" list="models-reviewer" placeholder="CLI default"><datalist id="models-reviewer"></datalist>
+              </div>
+              <div class="field">
+                <label for="f-re">Effort</label>
+                <select id="f-re" name="reviewer.effort"></select>
+              </div>
+              <div class="field">
+                <label for="f-rt">Timeout</label>
+                <div class="input-group"><input id="f-rt" name="reviewer.timeout" type="number" value="1800" min="60" step="60"><span class="addon">sec</span></div>
+              </div>
+              <div class="field span2">
+                <p id="pairing" class="pairing"></p>
+                <p id="cross-warn" class="warn hidden">Worker and reviewer resolve to the same model — cross-model review is required. Pick a different backend or model.</p>
+                <details class="rubric" open>
+                  <summary>Scoring rubric · 7 criteria, weighted</summary>
+                  <table id="rubric"></table>
+                </details>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <section class="card">
+          <header class="card-head"><span class="step">4</span><div><h2>Loop</h2><p>When to stop, and what happens on success.</p></div></header>
+          <div class="fields cols4">
+            <div class="field">
+              <label for="f-max">Max iterations</label>
+              <input id="f-max" name="loop.max_iterations" type="number" value="5" min="1" max="50">
+            </div>
+            <div class="field">
+              <label for="f-pass">Pass score</label>
+              <div class="input-group"><span class="addon">≥</span><input id="f-pass" name="loop.pass_score" type="number" value="9" min="0" max="10" step="0.1"></div>
+            </div>
+            <div class="field">
+              <label for="f-scoring">Scoring</label>
+              <select id="f-scoring" name="loop.scoring"><option value="weighted">Weighted average</option><option value="llm">Reviewer's overall</option></select>
+            </div>
+            <div class="field">
+              <label for="f-success">On success</label>
+              <select id="f-success" name="loop.on_success"><option value="pr">Open a pull request</option><option value="merge">Merge into base</option><option value="none">Leave on branch</option></select>
+            </div>
+            <div class="field">
+              <label for="f-stale">Stop if no progress</label>
+              <div class="input-group"><input id="f-stale" name="loop.stop_if_no_progress" type="number" value="2" min="0"><span class="addon">iters</span></div>
+              <p class="hint">0 disables the check.</p>
+            </div>
+            <div class="field">
+              <label for="f-budget">Budget</label>
+              <div class="input-group"><span class="addon">$</span><input id="f-budget" name="loop.budget_usd" type="number" step="0.01" min="0" placeholder="unlimited"></div>
+              <p class="hint">Uses costs reported by the CLIs.</p>
+            </div>
+            <div class="field">
+              <label for="f-retries">Hand-off retries</label>
+              <input id="f-retries" name="loop.handshake_retries" type="number" value="1" min="0" max="5">
+              <p class="hint">Re-OFFERs after a NACK.</p>
+            </div>
+          </div>
+          <div class="toggles">
+            <label class="toggle">
+              <input name="loop.respect_verdict" type="checkbox" checked><span class="switch"></span>
+              <span><b>Respect reviewer verdict</b><small>“request_changes” keeps iterating even when the score passes.</small></span>
+            </label>
+            <label class="toggle">
+              <input name="loop.require_tests" type="checkbox"><span class="switch"></span>
+              <span><b>Require tests</b><small>NACK the worker hand-off if it reports no test run.</small></span>
+            </label>
+          </div>
+        </section>
+      </div>
+
+      <div class="actionbar">
+        <span id="form-error" class="error"></span>
+        <span class="spacer"></span>
         <button type="button" class="btn" id="btn-cancel-form">Cancel</button>
         <button type="submit" class="btn primary" id="btn-submit">Start task</button>
-        <span id="form-error" class="error"></span>
       </div>
     </form>
   </section>
