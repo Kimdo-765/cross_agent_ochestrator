@@ -17,6 +17,7 @@ services:
       CAO_PORT: "8000"
       CAO_DATA_DIR: /data
       CAO_WORKSPACE: /workspace
+      TZ: ${TZ:-UTC}                         # task ids / timestamps use this zone
       # --- agent auth (either mount the CLI config dirs below, or pass keys) ---
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -24,21 +25,29 @@ services:
       GH_TOKEN: ${GH_TOKEN:-}                # for `on_success: pr`
       CAO_TUNNEL_URL: ${CAO_TUNNEL_URL:-}    # shown in the UI header when set (named tunnels)
       CAO_AUTH_TOKEN: ${CAO_AUTH_TOKEN:-}    # access token; generated (and printed in the logs) when empty
+      # git identity used for the commits the orchestrator makes (defaults to cao <cao@localhost>)
+      GIT_AUTHOR_NAME: ${CAO_GIT_NAME:-cao}
+      GIT_AUTHOR_EMAIL: ${CAO_GIT_EMAIL:-cao@localhost}
+      GIT_COMMITTER_NAME: ${CAO_GIT_NAME:-cao}
+      GIT_COMMITTER_EMAIL: ${CAO_GIT_EMAIL:-cao@localhost}
     ports:
       - "${CAO_HOST_BIND:-127.0.0.1}:${CAO_HOST_PORT:-8000}:8000"
     volumes:
       - ${CAO_WORKSPACE:-./workspace}:/workspace          # repositories the agents work on
       - cao-data:/data                                      # task database + logs
-      - ${HOME}/.claude:/home/cao/.claude                   # Claude Code login/session (optional)
-      - ${HOME}/.codex:/home/cao/.codex                     # Codex login (optional)
-      - ${HOME}/.gitconfig:/home/cao/.gitconfig:ro          # your git identity for commits (optional)
-      - ${HOME}/.ssh:/home/cao/.ssh:ro                      # pushing branches / PRs over ssh (optional)
+      # Host directories (scripts/start.sh creates them if missing so Docker never invents root-owned ones)
+      - ${HOME}/.claude:/home/cao/.claude                   # Claude Code login/session
+      - ${HOME}/.codex:/home/cao/.codex                     # Codex login
+      - ${HOME}/.ssh:/home/cao/.ssh:ro                      # pushing branches / PRs over ssh
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/meta"]
-      interval: 30s
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 10s
 
+  # Quick tunnel: no account needed; a random https://*.trycloudflare.com URL is printed in the logs.
+  #   docker compose --profile tunnel up -d
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cao-tunnel
@@ -46,17 +55,20 @@ services:
     depends_on:
       web:
         condition: service_healthy
-    # Quick tunnel (no account; random *.trycloudflare.com URL printed in the logs).
-    # For a stable hostname set CLOUDFLARE_TUNNEL_TOKEN in .env and the named tunnel is used instead.
-    command: >
-      sh -c 'if [ -n "$$CLOUDFLARE_TUNNEL_TOKEN" ]; then
-               cloudflared tunnel --no-autoupdate run --token "$$CLOUDFLARE_TUNNEL_TOKEN" --url http://web:8000;
-             else
-               cloudflared tunnel --no-autoupdate --url http://web:8000;
-             fi'
-    environment:
-      CLOUDFLARE_TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command: ["tunnel", "--no-autoupdate", "--url", "http://web:8000"]
     profiles: ["tunnel"]
+
+  # Named tunnel: stable hostname you configured in Cloudflare Zero Trust (public hostname -> http://web:8000).
+  #   CLOUDFLARE_TUNNEL_TOKEN=... docker compose --profile tunnel-named up -d
+  cloudflared-named:
+    image: cloudflare/cloudflared:latest
+    container_name: cao-tunnel
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN:-}"]
+    profiles: ["tunnel-named"]
 
 volumes:
   cao-data:

@@ -44,5 +44,5 @@ RUN git config --global user.name "cao" && git config --global user.email "cao@l
     && git config --global --add safe.directory '*'
 
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl -fsS http://127.0.0.1:${CAO_PORT}/api/meta >/dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl -fsS http://127.0.0.1:${CAO_PORT}/api/health >/dev/null || exit 1
 CMD ["sh", "-c", "cao web --host 0.0.0.0 --port ${CAO_PORT} --no-open"]

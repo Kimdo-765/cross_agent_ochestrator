@@ -161,7 +161,7 @@ def create_app(store: Optional[Store] = None) -> FastAPI:
     async def _auth(request: Request, call_next):
         token = os.environ.get("CAO_AUTH_TOKEN")
         path = request.url.path
-        if not token or path == "/login" or path.startswith("/static/"):
+        if not token or path in ("/login", "/api/health") or path.startswith("/static/"):
             return await call_next(request)
         presented = (
             request.cookies.get("cao_token")
@@ -187,6 +187,11 @@ def create_app(store: Optional[Store] = None) -> FastAPI:
         return resp
 
     # ---- meta ---------------------------------------------------------------------
+
+    @app.get("/api/health")
+    def health() -> dict[str, Any]:
+        """Unauthenticated liveness probe (Docker healthcheck); exposes nothing sensitive."""
+        return {"ok": True, "version": __version__}
 
     @app.get("/api/meta")
     def meta() -> dict[str, Any]:

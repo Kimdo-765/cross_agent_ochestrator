@@ -16,7 +16,7 @@ for arg in "$@"; do
   case "$arg" in
     --native) MODE=native ;;
     --no-tunnel) TUNNEL=0 ;;
-    --stop) docker compose --profile tunnel down; exit 0 ;;
+    --stop) docker compose --profile tunnel --profile tunnel-named down; exit 0 ;;
     -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -49,10 +49,14 @@ fi
 command -v docker >/dev/null || { echo "docker not found. Use --native, or install Docker (Desktop + WSL integration on Windows)." >&2; exit 1; }
 export CAO_HOST_PORT="$(free_port "${CAO_HOST_PORT:-}")"
 export CAO_WORKSPACE="${CAO_WORKSPACE:-./workspace}"
-mkdir -p "$CAO_WORKSPACE"
+mkdir -p "$CAO_WORKSPACE" "$HOME/.claude" "$HOME/.codex" "$HOME/.ssh"   # bind-mount sources must exist
 
 PROFILES=()
-[ "$TUNNEL" = 1 ] && PROFILES=(--profile tunnel)
+TUNNEL_SVC=cloudflared
+if [ "$TUNNEL" = 1 ]; then
+  if [ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]; then PROFILES=(--profile tunnel-named); TUNNEL_SVC=cloudflared-named
+  else PROFILES=(--profile tunnel); fi
+fi
 docker compose "${PROFILES[@]}" up -d --build
 
 echo
@@ -72,7 +76,7 @@ if [ "$TUNNEL" = 1 ]; then
   else
     echo -n "cloudflare tunnel:   waiting for URL"
     for _ in $(seq 1 60); do
-      URL="$(docker compose --profile tunnel logs cloudflared 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
+      URL="$(docker compose "${PROFILES[@]}" logs "$TUNNEL_SVC" 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
       if [ -n "$URL" ]; then
         echo; echo "cloudflare tunnel:   $URL"
         [ -n "$TOKEN" ] && echo "remote sign-in:      $URL/login?token=$TOKEN"
@@ -80,7 +84,7 @@ if [ "$TUNNEL" = 1 ]; then
       fi
       echo -n "."; sleep 1
     done
-    [ -z "${URL:-}" ] && echo " (not yet; run: docker compose --profile tunnel logs -f cloudflared)"
+    [ -z "${URL:-}" ] && echo " (not yet; run: docker compose ${PROFILES[*]} logs -f $TUNNEL_SVC)"
   fi
 fi
 echo

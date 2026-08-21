@@ -142,6 +142,7 @@ async def test_spa_routes(client):
 async def test_auth_token(client, monkeypatch):
     monkeypatch.setenv("CAO_AUTH_TOKEN", "s3cret")
     assert (await client.get("/api/tasks")).status_code == 401
+    assert (await client.get("/api/health")).json()["ok"] is True  # liveness probe stays public
     r = await client.get("/")
     assert r.status_code == 401 and "access token" in r.text
     assert (await client.get("/static/app.js")).status_code == 200  # static assets are public

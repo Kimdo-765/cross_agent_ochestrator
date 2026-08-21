@@ -53,10 +53,12 @@ cloudflare tunnel:   https://random-words.trycloudflare.com
 remote sign-in:      https://random-words.trycloudflare.com/login?token=Qm4…
 ```
 
-- 호스트의 `~/.claude`, `~/.codex`가 컨테이너에 마운트되므로 호스트에서 로그인돼 있으면 추가 설정이 필요 없습니다.
-- 터널은 기본이 **퀵 터널**(계정 불필요, URL은 매번 바뀜). 고정 주소가 필요하면 `.env`의 `CLOUDFLARE_TUNNEL_TOKEN`에 네임드 터널 토큰을 넣으세요.
-- 외부에서 접근 가능한 순간부터 **접근 토큰**이 강제됩니다(`CAO_AUTH_TOKEN` 미설정 시 자동 생성·출력).
+- 호스트의 `~/.claude`, `~/.codex`, `~/.ssh`가 컨테이너에 마운트되므로 호스트에서 로그인돼 있으면 추가 설정이 필요 없습니다. 에이전트가 작업할 저장소는 `CAO_WORKSPACE` 아래에 두고 UI에서 `/workspace/<repo>`로 지정합니다.
+- 터널은 기본이 **퀵 터널**(`--profile tunnel`, 계정 불필요, URL은 매번 바뀜). 고정 주소가 필요하면 `.env`의 `CLOUDFLARE_TUNNEL_TOKEN`에 네임드 터널 토큰을 넣으면 `--profile tunnel-named`가 사용됩니다(Cloudflare 대시보드에서 public hostname → `http://web:8000`).
+- 외부에서 접근 가능한 순간부터 **접근 토큰**이 강제됩니다(`CAO_AUTH_TOKEN` 미설정 시 자동 생성·출력). 헬스체크용 `/api/health`만 공개.
 - Docker 없이: `./scripts/start.sh --native` (로컬 `cloudflared` 필요) 또는 `cao web --tunnel`.
+- 중지: `./scripts/start.sh --stop` · 로그: `docker compose --profile tunnel logs -f`.
+- WSL2에서 `docker: command not found`가 나오면 Docker Desktop이 꺼져 있거나 해당 배포판의 WSL integration이 꺼진 것입니다(Settings → Resources → WSL integration).
 
 ## 빠른 시작 — CLI
 
@@ -169,7 +171,7 @@ cao run -w claude_code -r codex \
 
 ```sh
 pip install -e ".[dev]"
-pytest -q          # 실제 CLI 없이 tests/fake_bins 의 가짜 claude/codex 로 루프 전체를 검증 (59 tests)
+pytest -q          # 실제 CLI 없이 tests/fake_bins 의 가짜 claude/codex 로 루프 전체를 검증 (61 tests)
 ```
 
 ## 로드맵
