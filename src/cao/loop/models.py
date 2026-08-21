@@ -125,6 +125,7 @@ class TaskSpec:
     request: str
     acceptance_criteria: list[str] = field(default_factory=list)
     repo_path: str = "."
+    repo_url: Optional[str] = None  # set when the repo was cloned from a URL (informational)
     base_branch: Optional[str] = None  # None -> current HEAD branch
     worker: RoleConfig = field(default_factory=RoleConfig)
     reviewer: RoleConfig = field(default_factory=lambda: RoleConfig(backend="codex", role="reviewer"))
@@ -146,6 +147,7 @@ class TaskSpec:
             request=str(d.get("request") or ""),
             acceptance_criteria=[str(c) for c in crit],
             repo_path=str(d.get("repo_path") or "."),
+            repo_url=(str(d["repo_url"]).strip() or None) if d.get("repo_url") else None,
             base_branch=(d.get("base_branch") or None),
             worker=RoleConfig.from_dict(d.get("worker") or {}),
             reviewer=RoleConfig.from_dict(d.get("reviewer") or {"backend": "codex", "role": "reviewer"}),

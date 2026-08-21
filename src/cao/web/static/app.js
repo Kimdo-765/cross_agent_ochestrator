@@ -197,6 +197,39 @@
     $('#btn-browse').onclick = () => browse.classList.contains('hidden') ? showDir(form.elements.repo_path.value || META.workspace) : browse.classList.add('hidden');
     $('#btn-cancel-form').onclick = () => navigate('/');
 
+    // repository source: local path | git URL (clone into the workspace)
+    let repoMode = 'local';
+    const setRepoMode = (mode) => {
+      repoMode = mode;
+      for (const b of form.querySelectorAll('[data-repo-mode]')) b.classList.toggle('on', b.dataset.repoMode === mode);
+      for (const p of form.querySelectorAll('[data-repo-pane]')) p.classList.toggle('hidden', p.dataset.repoPane !== mode);
+    };
+    for (const b of form.querySelectorAll('[data-repo-mode]')) b.onclick = () => setRepoMode(b.dataset.repoMode);
+    const cloneStatus = $('#clone-status');
+    let cloned = null; // {path, default_branch, web_url}
+    const doClone = async () => {
+      const url = form.elements.repo_url.value.trim();
+      if (!url) { cloneStatus.innerHTML = '<span class="error">Paste a repository URL first.</span>'; return; }
+      const btn = $('#btn-clone');
+      btn.disabled = true;
+      cloneStatus.innerHTML = `<span class="busy">⟳</span> cloning ${esc(url)} into ${esc(META.workspace)} …`;
+      try {
+        const res = await api('/api/repos/clone', { method: 'POST', body: JSON.stringify({ url, branch: $('#f-clone-branch').value.trim() || null }) });
+        cloned = res;
+        form.elements.repo_path.value = res.path;
+        if (!form.elements.base_branch.value) form.elements.base_branch.value = res.default_branch;
+        if (!form.elements.title.value && !form.elements.request.value) form.elements.title.placeholder = `e.g. ${res.name}: …`;
+        cloneStatus.replaceChildren(el('span', { class: 'ok-mark' }, '✓'), ` ${res.existed ? 'using existing clone' : 'cloned'} `, el('code', {}, res.path),
+          ` · branch `, el('code', {}, res.default_branch), ` @ ${res.head.slice(0, 10)} · `, el('a', { href: res.web_url, target: '_blank' }, res.web_url));
+      } catch (e) {
+        cloned = null;
+        cloneStatus.replaceChildren(el('span', { class: 'error' }, e.message));
+      } finally { btn.disabled = false; }
+    };
+    $('#btn-clone').onclick = doClone;
+    form.elements.repo_url.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); doClone(); } });
+    if (!META.gh_token && !META.ssh_key) cloneStatus.append(el('span', { class: 'muted' }, ' Public repos only (no GH_TOKEN / ssh key available).'));
+
     if (prefill) applyPrefill(form, prefill);
     syncRole(); syncPairing();
     loadRole('worker', false, prefill?.worker?.model || '');
@@ -205,6 +238,11 @@
     form.onsubmit = async (ev) => {
       ev.preventDefault();
       $('#form-error').textContent = '';
+      if (repoMode === 'url' && !cloned) {
+        $('#form-error').textContent = form.elements.repo_url.value.trim() ? 'Click Clone first so the task has a local checkout.' : 'Paste a repository URL and click Clone.';
+        form.elements.repo_url.focus();
+        return;
+      }
       for (const [name, msg] of [['request', 'Describe what should be done.'], ['repo_path', 'Choose a repository path.']]) {
         const elm = form.elements[name];
         if (!elm.value.trim()) { $('#form-error').textContent = msg; elm.classList.add('touched'); elm.focus(); return; }
@@ -214,6 +252,7 @@
       try {
         const body = collect(form);
         for (const role of ['worker', 'reviewer']) body[role].model = modelOf(role) || null;
+        if (repoMode !== 'url') body.repo_url = (prefill?.repo_url && body.repo_path === prefill.repo_path) ? prefill.repo_url : null;
         const res = await api('/api/tasks', { method: 'POST', body: JSON.stringify({ ...body, start: true }) });
         navigate(`/tasks/${res.id}`);
       } catch (e) { $('#form-error').textContent = e.message; $('#btn-submit').disabled = false; }
@@ -234,7 +273,7 @@
   }
   function applyPrefill(form, spec) {
     const set = (name, v) => { const e = form.elements[name]; if (!e || v == null) return; if (e.type === 'checkbox') e.checked = !!v; else e.value = v; };
-    set('title', spec.title); set('request', spec.request); set('repo_path', spec.repo_path); set('base_branch', spec.base_branch);
+    set('title', spec.title); set('request', spec.request); set('repo_path', spec.repo_path); set('base_branch', spec.base_branch); set('repo_url', spec.repo_url);
     set('acceptance_criteria', (spec.acceptance_criteria || []).map((c) => `- ${c}`).join('\n'));
     for (const role of ['worker', 'reviewer']) for (const k of ['backend', 'effort', 'role', 'instructions', 'timeout']) set(`${role}.${k}`, spec[role]?.[k]);
     for (const k of Object.keys(spec.loop || {})) set(`loop.${k}`, spec.loop[k]);
@@ -266,7 +305,7 @@
       $('#d-meta').replaceChildren(
         el('span', {}, 'worker ', el('code', {}, `${identity(spec.worker)} · ${spec.worker.role}${spec.worker.effort ? ' · ' + spec.worker.effort : ''}`)),
         el('span', {}, 'reviewer ', el('code', {}, `${identity(spec.reviewer)}${spec.reviewer.effort ? ' · ' + spec.reviewer.effort : ''}`)),
-        el('span', {}, 'repo ', el('code', {}, spec.repo_path)),
+        el('span', {}, 'repo ', el('code', {}, spec.repo_path), spec.repo_url ? el('span', {}, ' · ', el('a', { href: spec.repo_url.replace(/\.git$/, '').replace(/^git@([^:]+):/, 'https://$1/'), target: '_blank' }, spec.repo_url)) : null),
         d.branch ? el('span', {}, 'branch ', el('code', {}, d.branch)) : null,
         el('span', {}, `iterations ${d.iterations.length}/${spec.loop.max_iterations}`),
         el('span', {}, `cost ${money(d.total_cost_usd)}`),
